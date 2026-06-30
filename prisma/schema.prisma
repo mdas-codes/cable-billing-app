@@ -1,0 +1,128 @@
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ============================================================
+// PACKAGE
+// Defines a cable subscription plan: its price and how many
+// days one billing cycle lasts (e.g. 28 days, 84 days, etc).
+// ============================================================
+model Package {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  price       Decimal  @db.Decimal(10, 2)
+  durationDays Int
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  customers   Customer[]
+  payments    Payment[]
+
+  @@map("packages")
+}
+
+// ============================================================
+// CUSTOMER
+// Core customer record. balanceDue is the live, persisted
+// outstanding amount (carry-forward included) so the UI never
+// has to re-aggregate payment history just to render a list.
+// expiryDate is the end of the customer's CURRENT billing
+// cycle (i.e. their next due date) and is driven by the
+// selected Package's durationDays.
+// ============================================================
+model Customer {
+  id            String         @id @default(cuid())
+  customerId    String         @unique // human-facing short ID, shown first in UI
+  name          String
+  address       String?
+  status        CustomerStatus @default(ACTIVE)
+
+  packageId     String
+  package       Package        @relation(fields: [packageId], references: [id])
+
+  // Billing cycle tracking
+  cycleStartDate DateTime      @default(now())
+  expiryDate     DateTime      // current cycle end date / next due date
+  balanceDue     Decimal       @default(0) @db.Decimal(10, 2) // carry-forward unpaid amount
+
+  payments      Payment[]
+
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  @@index([expiryDate])
+  @@index([status])
+  @@map("customers")
+}
+
+enum CustomerStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+// ============================================================
+// PAYMENT
+// Every payment event (full or partial) is logged here.
+// packagePriceSnapshot freezes the package price at the moment
+// of payment so historical records never shift if a package
+// price changes later. recordedBy distinguishes collector vs
+// admin entries for accountability.
+// ============================================================
+model Payment {
+  id                    String        @id @default(cuid())
+
+  customerId            String
+  customer              Customer      @relation(fields: [customerId], references: [id])
+
+  packageId             String
+  package               Package       @relation(fields: [packageId], references: [id])
+  packagePriceSnapshot  Decimal       @db.Decimal(10, 2)
+
+  amountPaid            Decimal       @db.Decimal(10, 2)
+  balanceAfterPayment   Decimal       @db.Decimal(10, 2) // customer.balanceDue at time of recording, post-payment
+  paymentType           PaymentType   @default(FULL)
+  recordedBy            RecordedBy    @default(COLLECTOR)
+  note                  String?
+
+  paidAt                DateTime      @default(now())
+  createdAt             DateTime      @default(now())
+
+  @@index([paidAt])
+  @@index([customerId])
+  @@map("payments")
+}
+
+enum PaymentType {
+  FULL
+  PARTIAL
+}
+
+enum RecordedBy {
+  COLLECTOR
+  ADMIN
+}
+
+// ============================================================
+// ADMIN CONFIG
+// Simple key-value store for global app settings: last backup
+// timestamp, last nightly cron run, business name, etc. Avoids
+// hardcoding operational metadata anywhere else.
+// ============================================================
+model AdminConfig {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     String
+  updatedAt DateTime @updatedAt
+
+  @@map("admin_config")
+}
