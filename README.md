@@ -18,6 +18,9 @@ Features are still being developed and may change frequently.
 - Next.js
 - Node.js
 - JavaScript
+- Tailwind CSS
+- SupaBase
+- Vercel
 
 ---
 
@@ -27,11 +30,12 @@ Install dependencies:
 
 ```bash
 npm install
+```
 
 Run development server:
-
+```bash
 npm run dev
-
+```
 Open:
 
 http://localhost:3000
@@ -39,3 +43,6 @@ http://localhost:3000
 Note
 
 This project is not completed yet and is under active development.
+
+---
+Developed by [saikat](https://github.com/saikat-codes) *(WIP project)*
