@@ -929,7 +929,7 @@ export default function AdminPage() {
                     onChange={(e) => setNewPkg({ ...newPkg, name: e.target.value })}
                     placeholder="Plan Name (e.g., Premium HD Pack)"
                     className="w-full border-2 border-slate-200 bg-slate-50 rounded-2xl px-4 py-3.5
-                               text-base font-bold focus:outline-none focus:bg-white
+                               text-black font-bold focus:outline-none focus:bg-white
                                focus:border-slate-600 placeholder:font-normal placeholder:text-slate-400 shadow-inner"
                   />
                   <div className="flex gap-2">
