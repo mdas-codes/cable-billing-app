@@ -1,22 +1,3 @@
-// app/api/customers/route.js
-// ---------------------------------------------------------------------
-// Handles Customer listing and creation.
-//
-// GET  /api/customers                    — Public. Returns customers for
-//                                         the walk-list (due today +
-//                                         overdue) or a search query.
-//
-// POST /api/customers                    — Admin only. Creates a single
-//                                         new customer record.
-//
-// Query params for GET:
-//   ?mode=walklist     Returns customers due today + all overdue ones.
-//                      This powers the collector's daily checklist.
-//   ?mode=all          Returns all active customers (for admin view).
-//   ?search=QUERY      Searches by customerId or name (for payment form).
-//   ?customerId=ID     Returns a single customer by their human-facing ID.
-// ---------------------------------------------------------------------
-
 import prisma from "@/lib/prisma";
 import {
   verifyAdminPassword,
@@ -26,8 +7,6 @@ import {
   successResponse,
 } from "@/lib/auth";
 
-// Helper: serialize a customer object — converts Decimal fields to numbers
-// and formats dates as ISO strings so they travel cleanly over JSON.
 function serializeCustomer(c) {
   return {
     id: c.id,
@@ -36,14 +15,8 @@ function serializeCustomer(c) {
     address: c.address ?? "",
     status: c.status,
     packageId: c.packageId,
-    package: c.package
-      ? {
-          id: c.package.id,
-          name: c.package.name,
-          price: Number(c.package.price),
-          durationDays: c.package.durationDays,
-        }
-      : null,
+    packageName: c.package?.name ?? "",
+    packagePrice: c.package ? Number(c.package.price) : 0,
     cycleStartDate: c.cycleStartDate.toISOString(),
     expiryDate: c.expiryDate.toISOString(),
     balanceDue: Number(c.balanceDue),
@@ -53,7 +26,7 @@ function serializeCustomer(c) {
 }
 
 // ---------------------------------------------------------------------
-// GET /api/customers
+// GET: Fetch Walklist (Shows all customers who owe money, past or present)
 // ---------------------------------------------------------------------
 export async function GET(request) {
   const { searchParams } = new URL(request.url);
@@ -62,208 +35,100 @@ export async function GET(request) {
   const customerIdParam = searchParams.get("customerId");
 
   try {
-    // ------------------------------------------------------------------
-    // Mode: single customer lookup by human-facing customerId
-    // Used by the payment form to auto-fill customer details.
-    // ------------------------------------------------------------------
     if (customerIdParam) {
       const customer = await prisma.customer.findUnique({
         where: { customerId: customerIdParam.trim().toUpperCase() },
         include: { package: true },
       });
-
-      if (!customer) {
-        return Response.json(
-          { success: false, error: "Customer not found." },
-          { status: 404 }
-        );
-      }
-
+      if (!customer) return Response.json({ success: false, error: "Customer not found" }, { status: 404 });
       return successResponse({ customer: serializeCustomer(customer) });
     }
 
-    // ------------------------------------------------------------------
-    // Mode: search by name or customerId (partial match)
-    // Used by the collector's payment form live search.
-    // ------------------------------------------------------------------
     if (search) {
       const customers = await prisma.customer.findMany({
         where: {
           status: "ACTIVE",
           OR: [
-            {
-              customerId: {
-                contains: search.trim(),
-                mode: "insensitive",
-              },
-            },
-            {
-              name: {
-                contains: search.trim(),
-                mode: "insensitive",
-              },
-            },
+            { customerId: { contains: search.trim(), mode: "insensitive" } },
+            { name: { contains: search.trim(), mode: "insensitive" } },
           ],
         },
         include: { package: true },
         orderBy: { customerId: "asc" },
         take: 20,
       });
-
-      return successResponse({
-        customers: customers.map(serializeCustomer),
-      });
+      return successResponse({ customers: customers.map(serializeCustomer) });
     }
 
-    // ------------------------------------------------------------------
-    // Mode: walklist — customers due today + all overdue customers
-    // "Due today" = expiryDate falls on today's date (any time today).
-    // "Overdue"   = expiryDate is before today (missed renewal).
-    // Both groups are shown together on the collector's checklist.
-    // ------------------------------------------------------------------
+    // CHANGED LOGIC: Persistent walklist until cleared off (balanceDue > 0 or overdue)
     if (mode === "walklist") {
       const now = new Date();
-
-      // Start of today (00:00:00) in local time
-      const todayStart = new Date(
-        now.getFullYear(),
-        now.getMonth(),
-        now.getDate(),
-        0, 0, 0, 0
-      );
-
-      // End of today (23:59:59)
-      const todayEnd = new Date(
-        now.getFullYear(),
-        now.getMonth(),
-        now.getDate(),
-        23, 59, 59, 999
-      );
-
       const customers = await prisma.customer.findMany({
         where: {
           status: "ACTIVE",
           OR: [
-            // Due today
-            {
-              expiryDate: {
-                gte: todayStart,
-                lte: todayEnd,
-              },
-            },
-            // Overdue (past due, not yet renewed)
-            {
-              expiryDate: { lt: todayStart },
-              balanceDue: { gt: 0 },
-            },
-          ],
+            { balanceDue: { gt: 0 } }, // Has any pending debt
+            { expiryDate: { lte: now } } // Or cycle has expired
+          ]
         },
         include: { package: true },
         orderBy: [
-          { expiryDate: "asc" }, // overdue first, then due today
-          { customerId: "asc" },
+          { balanceDue: "desc" },
+          { customerId: "asc" }
         ],
       });
-
-      return successResponse({
-        customers: customers.map(serializeCustomer),
-      });
+      return successResponse({ customers: customers.map(serializeCustomer) });
     }
 
-    // ------------------------------------------------------------------
-    // Mode: all — every active customer for admin view
-    // ------------------------------------------------------------------
-    if (mode === "all") {
-      const customers = await prisma.customer.findMany({
-        where: { status: "ACTIVE" },
-        include: { package: true },
-        orderBy: { customerId: "asc" },
-      });
-
-      return successResponse({
-        customers: customers.map(serializeCustomer),
-      });
-    }
-
-    // Default: return all active customers
+    // Admin overview mode (all active)
     const customers = await prisma.customer.findMany({
       where: { status: "ACTIVE" },
       include: { package: true },
       orderBy: { customerId: "asc" },
     });
-
-    return successResponse({
-      customers: customers.map(serializeCustomer),
-    });
+    return successResponse({ customers: customers.map(serializeCustomer) });
   } catch (err) {
     return serverErrorResponse("Failed to fetch customers.", err);
   }
 }
 
 // ---------------------------------------------------------------------
-// POST /api/customers
-// Admin only — requires x-admin-password header.
-// Creates a single new customer.
-//
-// Request body (JSON):
-// {
-//   "customerId":  "C001",         // required, unique human-facing ID
-//   "name":        "Ramesh Kumar", // required
-//   "address":     "Ward 5, ...",  // optional
-//   "packageId":   "cld...",       // required, Prisma package ID
-//   "cycleStartDate": "2024-01-01" // optional, defaults to today
-// }
+// POST: Register New Customer (Supports Custom Expiry Date & Flexible 'OTHER' plan)
 // ---------------------------------------------------------------------
 export async function POST(request) {
   const auth = verifyAdminPassword(request);
   if (!auth.ok) return unauthorizedResponse(auth.error);
 
   let body;
-  try {
-    body = await request.json();
-  } catch {
-    return badRequestResponse("Invalid JSON body.");
-  }
+  try { body = await request.json(); } catch { return badRequestResponse("Invalid JSON body."); }
 
-  const { customerId, name, address, packageId, cycleStartDate } = body;
+  const { customerId, name, address, packageId, cycleStartDate, customExpiryDate, customPrice } = body;
 
-  // Validate required fields
-  if (!customerId || customerId.trim().length === 0) {
-    return badRequestResponse("Customer ID is required.");
-  }
-  if (!name || name.trim().length === 0) {
-    return badRequestResponse("Customer name is required.");
-  }
-  if (!packageId) {
-    return badRequestResponse("Package selection is required.");
+  if (!customerId || !name || !packageId) {
+    return badRequestResponse("Missing required fields (ID, Name, or Package).");
   }
 
   try {
-    // Check for duplicate customerId
     const existing = await prisma.customer.findUnique({
       where: { customerId: customerId.trim().toUpperCase() },
     });
-    if (existing) {
-      return badRequestResponse(
-        `Customer ID "${customerId.trim().toUpperCase()}" already exists.`
-      );
+    if (existing) return badRequestResponse(`Customer ID "${customerId.toUpperCase()}" already exists.`);
+
+    const pkg = await prisma.package.findUnique({ where: { id: packageId } });
+    if (!pkg) return badRequestResponse("Selected package not found.");
+
+    const startDate = cycleStartDate ? new Date(cycleStartDate) : new Date();
+
+    // Set expiry date: explicitly chosen custom expiry date or fallback to default duration
+    let expiry = customExpiryDate ? new Date(customExpiryDate) : new Date(startDate);
+    if (!customExpiryDate) {
+      expiry.setDate(expiry.getDate() + pkg.durationDays);
     }
 
-    // Fetch the selected package to calculate expiry date
-    const pkg = await prisma.package.findUnique({
-      where: { id: packageId },
-    });
-    if (!pkg) {
-      return badRequestResponse("Selected package not found.");
-    }
-
-    // Calculate cycle start and expiry dates
-    const startDate = cycleStartDate
-      ? new Date(cycleStartDate)
-      : new Date();
-
-    const expiry = new Date(startDate);
-    expiry.setDate(expiry.getDate() + pkg.durationDays);
+    // Determine initial rates (Use package price, or allow absolute custom dynamic override for "OTHER" packages)
+    const initialPrice = pkg.name.toUpperCase() === "OTHER" && customPrice !== undefined
+      ? Number(customPrice)
+      : Number(pkg.price);
 
     const customer = await prisma.customer.create({
       data: {
@@ -273,7 +138,7 @@ export async function POST(request) {
         packageId,
         cycleStartDate: startDate,
         expiryDate: expiry,
-        balanceDue: Number(pkg.price), // first cycle is immediately due
+        balanceDue: initialPrice, // Instantly reflects current plan rates + any balance
         status: "ACTIVE",
       },
       include: { package: true },
@@ -281,6 +146,97 @@ export async function POST(request) {
 
     return successResponse({ customer: serializeCustomer(customer) });
   } catch (err) {
-    return serverErrorResponse("Failed to create customer.", err);
+    return serverErrorResponse("Failed to register customer.", err);
+  }
+}
+
+// ---------------------------------------------------------------------
+// PUT: Update Customer Logic (Plan Swaps, Mid-month Cancellations, Manual Prorating)
+// ---------------------------------------------------------------------
+export async function PUT(request) {
+  const auth = verifyAdminPassword(request);
+  if (!auth.ok) return unauthorizedResponse(auth.error);
+
+  let body;
+  try { body = await request.json(); } catch { return badRequestResponse("Invalid JSON."); }
+
+  const { id, name, address, packageId, customExpiryDate, manualBalanceAdjust, status } = body;
+
+  if (!id) return badRequestResponse("Customer record database ID is required.");
+
+  try {
+    const currentCustomer = await prisma.customer.findUnique({
+      where: { id },
+      include: { package: true }
+    });
+    if (!currentCustomer) return badRequestResponse("Customer record not found.");
+
+    let updatedData = {
+      name: name ? name.trim() : currentCustomer.name,
+      address: address !== undefined ? address.trim() : currentCustomer.address,
+      status: status || currentCustomer.status,
+    };
+
+    // If swapping packages instantly:
+    if (packageId && packageId !== currentCustomer.packageId) {
+      const newPkg = await prisma.package.findUnique({ where: { id: packageId } });
+      if (!newPkg) return badRequestResponse("New package target does not exist.");
+
+      updatedData.packageId = packageId;
+
+      // Instantly modify balance to new package structure keeping previous due adjustments intact
+      const previousDue = Number(currentCustomer.balanceDue) - Number(currentCustomer.package?.price || 0);
+      updatedData.balanceDue = (previousDue < 0 ? 0 : previousDue) + Number(newPkg.price);
+
+      // Reset cycle windows automatically if no explicit custom override date is attached
+      if (!customExpiryDate) {
+        const now = new Date();
+        updatedData.cycleStartDate = now;
+        const nextExpiry = new Date(now);
+        nextExpiry.setDate(nextExpiry.getDate() + newPkg.durationDays);
+        updatedData.expiryDate = nextExpiry;
+      }
+    }
+
+    // Handle custom manual overrides (like charging for only 10 days usage mid-month)
+    if (customExpiryDate) {
+      updatedData.expiryDate = new Date(customExpiryDate);
+    }
+
+    if (manualBalanceAdjust !== undefined) {
+      // Direct assignment override by admin for absolute control
+      updatedData.balanceDue = Number(manualBalanceAdjust);
+    }
+
+    const updatedCustomer = await prisma.customer.update({
+      where: { id },
+      data: updatedData,
+      include: { package: true }
+    });
+
+    return successResponse({ customer: serializeCustomer(updatedCustomer), message: "Customer profile updated successfully." });
+  } catch (err) {
+    return serverErrorResponse("Failed updating customer context.", err);
+  }
+}
+
+// ---------------------------------------------------------------------
+// DELETE: Permanent Cascade Customer Purge
+// ---------------------------------------------------------------------
+export async function DELETE(request) {
+  const auth = verifyAdminPassword(request);
+  if (!auth.ok) return unauthorizedResponse(auth.error);
+
+  const { searchParams } = new URL(request.url);
+  const id = searchParams.get("id");
+
+  if (!id) return badRequestResponse("Database ID param required for deletion execution.");
+
+  try {
+    // Cascade delete automatically triggered across prisma mapping schema
+    await prisma.customer.delete({ where: { id } });
+    return successResponse({ message: "Customer and all associated records permanently purged." });
+  } catch (err) {
+    return serverErrorResponse("Failed executing permanent clean deletion action.", err);
   }
 }

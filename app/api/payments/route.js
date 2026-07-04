@@ -18,6 +18,7 @@
 // ---------------------------------------------------------------------
 
 import prisma from "@/lib/prisma";
+import { NextResponse } from "next/server";
 import {
   verifyAdminPassword,
   unauthorizedResponse,
@@ -170,7 +171,8 @@ export async function POST(request) {
     return badRequestResponse("Invalid JSON body.");
   }
 
-  const { customerId, amountPaid, recordedBy, note } = body;
+  // Extract customDate alongside your existing parameters
+  const { customerId, amountPaid, recordedBy, note, customDate } = body;
 
   // Validate inputs
   if (!customerId || customerId.trim().length === 0) {
@@ -222,19 +224,21 @@ export async function POST(request) {
     // Determine payment type
     const paymentType = newBalance <= 0 ? "FULL" : "PARTIAL";
 
+    // Determine the payment timestamp base:
+    // If customDate is passed from the admin tools layout, backdate it. Otherwise use the current runtime.
+    const paymentDate = customDate ? new Date(customDate) : new Date();
+
     let updatedCustomerData = {};
 
     if (paymentType === "FULL") {
-      // Fully paid (or overpaid) — renew billing cycle
-      const now = new Date();
+      // Fully paid (or overpaid) — renew billing cycle using the determined paymentDate structure
       const newCycleStart = new Date(
-        now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0
+        paymentDate.getFullYear(), paymentDate.getMonth(), paymentDate.getDate(), 0, 0, 0, 0
       );
       const newExpiry = new Date(newCycleStart);
       newExpiry.setDate(newExpiry.getDate() + customer.package.durationDays);
 
       // Next cycle balance = package price minus any credit (overpayment)
-      // If overpaid by ₹50, next balance = packagePrice - 50
       const nextBalance = packagePrice + newBalance; // newBalance is negative if overpaid
       const finalNextBalance = nextBalance < 0 ? 0 : nextBalance;
 
@@ -250,9 +254,7 @@ export async function POST(request) {
       };
     }
 
-    // Use a Prisma transaction to ensure BOTH the payment record AND
-    // the customer update happen together — if one fails, both roll back.
-    // This is the core data-safety mechanism of the app.
+    // Prisma transactional layer ensures integrity across operations
     const [payment] = await prisma.$transaction([
       prisma.payment.create({
         data: {
@@ -264,7 +266,7 @@ export async function POST(request) {
           paymentType,
           recordedBy: validRecordedBy,
           note: note ? note.trim() : null,
-          paidAt: new Date(),
+          paidAt: paymentDate, // <--- Correctly commits the custom date or default current time
         },
         include: {
           customer: { select: { customerId: true, name: true } },
@@ -279,9 +281,7 @@ export async function POST(request) {
 
     // ------------------------------------------------------------------
     // CLEANUP: Delete payment records older than 3 months.
-    // Runs silently after each payment — keeps the database lean.
-    // Wrapped in its own try/catch so a cleanup failure never blocks
-    // the actual payment response.
+    // Wrapped in its own block so cleanups don't threaten execution.
     // ------------------------------------------------------------------
     try {
       const threeMonthsAgo = new Date();
@@ -302,5 +302,59 @@ export async function POST(request) {
     });
   } catch (err) {
     return serverErrorResponse("Failed to record payment.", err);
+  }
+}
+// ADD THIS DELETE METHOD:
+export async function DELETE(request) {
+  try {
+    // 1. Password Verification
+    const adminPassword = request.headers.get("x-admin-password");
+    if (adminPassword !== process.env.ADMIN_PASSWORD) {
+      return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
+    }
+
+    // 2. Extract targeted payment ID
+    const { searchParams } = new URL(request.url);
+    const id = searchParams.get("id");
+
+    if (!id) {
+      return NextResponse.json({ success: false, error: "Missing log identifier ID" }, { status: 400 });
+    }
+
+    // 3. Find the payment record first
+    const existingPayment = await prisma.payment.findUnique({
+      where: { id: id },
+    });
+
+    if (!existingPayment) {
+      return NextResponse.json({ success: false, error: "Payment record not found" }, { status: 404 });
+    }
+
+    // 4. Safely execute reversal using updateMany to avoid strict unique constraints
+    await prisma.$transaction([
+      // A) Safely revert balance tracking using updateMany
+      prisma.customer.updateMany({
+        where: { customerId: existingPayment.customerId },
+        data: {
+          balanceDue: {
+            increment: existingPayment.amountPaid,
+          },
+        },
+      }),
+      // B) Delete the payment record
+      prisma.payment.delete({
+        where: { id: id },
+      }),
+    ]);
+
+    return NextResponse.json({ success: true, message: "Payment tracking successfully reversed" });
+  } catch (error) {
+    // We pass back the actual error message here so you can see exactly what failed in the network response
+    console.error("Deletion Error:", error);
+    return NextResponse.json({
+      success: false,
+      error: "Database transaction failed",
+      details: error.message
+    }, { status: 500 });
   }
 }

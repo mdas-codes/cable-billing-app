@@ -24,15 +24,15 @@ function formatDateTime(iso) {
 
 function SummaryCard({ label, value, color, icon }) {
   return (
-    <div className={`rounded-2xl p-4 border-2 shadow-sm ${color} flex items-center gap-4 min-w-0`}>
-      <div className="text-3xl select-none bg-white/80 w-12 h-12 rounded-xl flex items-center justify-center shrink-0 shadow-sm border border-slate-200">
+    <div className={`rounded-2xl p-5 border-2 shadow-sm ${color} flex items-center gap-4 min-w-0`}>
+      <div className="text-3xl select-none bg-white w-14 h-14 rounded-2xl flex items-center justify-center shrink-0 shadow-sm border border-slate-200">
         {icon}
       </div>
       <div className="min-w-0 flex-1">
         <span className="block text-[11px] font-black uppercase tracking-wider text-slate-500">
           {label}
         </span>
-        <p className="text-xl sm:text-2xl font-black tracking-tight text-slate-900 truncate mt-0.5">
+        <p className="text-2xl sm:text-3xl font-black tracking-tight text-slate-900 truncate mt-0.5">
           {value}
         </p>
       </div>
@@ -40,7 +40,7 @@ function SummaryCard({ label, value, color, icon }) {
   );
 }
 
-function PaymentRow({ payment }) {
+function PaymentRow({ payment, onDelete, isDeleting }) {
   const isFull = payment.paymentType === "FULL";
   return (
     <div className="p-4 border-b border-slate-200/60 hover:bg-slate-50/60 transition-colors">
@@ -70,10 +70,21 @@ function PaymentRow({ payment }) {
             </p>
           )}
         </div>
-        <div className="text-left sm:text-right shrink-0 bg-slate-50 sm:bg-transparent p-2.5 sm:p-0 rounded-xl border border-slate-200 sm:border-0 flex sm:flex-col items-center sm:items-end justify-between sm:justify-start gap-2 sm:gap-0 mt-1 sm:mt-0">
-          <p className="text-xl font-black text-emerald-700">{formatRupees(payment.amountPaid)}</p>
-          {Number(payment.balanceAfterPayment) > 0 && (
-            <p className="text-xs text-rose-600 font-black mt-0.5">Bal: {formatRupees(payment.balanceAfterPayment)}</p>
+        <div className="text-left sm:text-right shrink-0 bg-slate-50 sm:bg-transparent p-2.5 sm:p-0 rounded-xl border border-slate-200 sm:border-0 flex sm:flex-col items-center sm:items-end justify-between sm:justify-start gap-2 sm:gap-0 mt-1 sm:mt-0 w-full sm:w-auto">
+          <div>
+            <p className="text-xl font-black text-emerald-700">{formatRupees(payment.amountPaid)}</p>
+            {Number(payment.balanceAfterPayment) > 0 && (
+              <p className="text-xs text-rose-600 font-black mt-0.5">Bal: {formatRupees(payment.balanceAfterPayment)}</p>
+            )}
+          </div>
+          {onDelete && (
+            <button
+              onClick={() => onDelete(payment.id)}
+              disabled={isDeleting}
+              className="text-xs text-rose-700 font-black bg-rose-50 hover:bg-rose-100 disabled:bg-slate-100 disabled:text-slate-400 px-3 py-1.5 rounded-xl border-2 border-rose-200 transition-all active:scale-[0.95] mt-1 sm:mt-3"
+            >
+              {isDeleting ? "..." : "🗑️ Delete"}
+            </button>
           )}
         </div>
       </div>
@@ -114,11 +125,11 @@ function DueCustomerRow({ customer }) {
   );
 }
 
-function ToolHeader({ color, title, subtitle }) {
+function ToolHeader({ title, subtitle, bgColor = "bg-slate-900" }) {
   return (
-    <div className={`${color} border-b border-black/10 px-4 py-4`}>
-      <h2 className="text-white font-black text-lg uppercase tracking-wide leading-none">{title}</h2>
-      {subtitle && <p className="text-white/80 text-xs font-bold mt-1.5 tracking-wider uppercase">{subtitle}</p>}
+    <div className={`${bgColor} px-5 py-4`}>
+      <h2 className="text-white text-lg font-black tracking-wide uppercase flex items-center gap-2">{title}</h2>
+      {subtitle && <p className="text-white/70 text-xs font-bold mt-1 tracking-wider uppercase">{subtitle}</p>}
     </div>
   );
 }
@@ -147,6 +158,9 @@ export default function AdminPage() {
   const [adminSubmitting, setAdminSubmitting] = useState(false);
   const [adminSubmitResult, setAdminSubmitResult] = useState(null);
 
+  // Delete payment
+  const [deletingPaymentId, setDeletingPaymentId] = useState(null);
+
   // Edit customer
   const [editSearchId, setEditSearchId] = useState("");
   const [editCustomer, setEditCustomer] = useState(null);
@@ -155,6 +169,7 @@ export default function AdminPage() {
   const [editPackageId, setEditPackageId] = useState("");
   const [editExpiryDate, setEditExpiryDate] = useState("");
   const [editAddress, setEditAddress] = useState("");
+  const [editBalanceDue, setEditBalanceDue] = useState("");
   const [editSaving, setEditSaving] = useState(false);
   const [editResult, setEditResult] = useState(null);
 
@@ -168,7 +183,7 @@ export default function AdminPage() {
   const [delResult, setDelResult] = useState(null);
 
   // Add new customer
-  const [newCust, setNewCust] = useState({ customerId: "", name: "", address: "", packageId: "", cycleStartDate: "" });
+  const [newCust, setNewCust] = useState({ customerId: "", name: "", address: "", packageId: "", cycleStartDate: "", customExpiryDate: "", customPrice: "" });
   const [addingCust, setAddingCust] = useState(false);
   const [addCustResult, setAddCustResult] = useState(null);
 
@@ -184,6 +199,17 @@ export default function AdminPage() {
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState(null);
   const [exporting, setExporting] = useState(false);
+
+  // Missed / Backdated Payment Tool States
+  const [missedCustomerId, setMissedCustomerId] = useState("");
+  const [missedFoundCustomer, setMissedFoundCustomer] = useState(null);
+  const [missedAmount, setMissedAmount] = useState("");
+  const [missedDate, setMissedDate] = useState("");
+  const [missedNote, setMissedNote] = useState("");
+  const [missedLookingUp, setMissedLookingUp] = useState(false);
+  const [missedLookupError, setMissedLookupError] = useState("");
+  const [missedSubmitting, setMissedSubmitting] = useState(false);
+  const [missedSubmitResult, setMissedSubmitResult] = useState(null);
 
   useEffect(() => {
     const saved = sessionStorage.getItem("adminPassword");
@@ -219,8 +245,8 @@ export default function AdminPage() {
     } catch { } finally { setLoadingToday(false); }
   }, []);
 
-  const loadMonthly = useCallback(async () => {
-    if (monthlyData) return;
+  const loadMonthly = useCallback(async (force = false) => {
+    if (monthlyData && !force) return;
     setLoadingMonthly(true);
     try {
       const res = await fetch("/api/admin/summary?mode=monthly", { headers: { "x-admin-password": getPassword() } });
@@ -276,6 +302,82 @@ export default function AdminPage() {
     finally { setAdminSubmitting(false); }
   };
 
+  const handleDeletePayment = async (paymentId) => {
+    if (!window.confirm("🗑️ Are you sure you want to permanently delete this payment record? This will alter balances accordingly.")) return;
+    setDeletingPaymentId(paymentId);
+    try {
+      const res = await fetch(`/api/payments?id=${paymentId}`, {
+        method: "DELETE",
+        headers: { "x-admin-password": getPassword() }
+      });
+      const data = await res.json();
+      if (data.success) {
+        setTodayData(null);
+        loadToday();
+        loadMonthly(true);
+      } else {
+        alert(data.error || "Failed to remove payment log.");
+      }
+    } catch {
+      alert("🌐 Network error. Action unverified.");
+    } finally {
+      setDeletingPaymentId(null);
+    }
+  };
+
+  const handleMissedLookup = async () => {
+    if (!missedCustomerId.trim()) return;
+    setMissedLookingUp(true); setMissedLookupError(""); setMissedFoundCustomer(null); setMissedSubmitResult(null);
+    try {
+      const res = await fetch(`/api/customers?customerId=${encodeURIComponent(missedCustomerId.trim().toUpperCase())}`);
+      const data = await res.json();
+      if (data.success && data.customer) {
+        setMissedFoundCustomer(data.customer);
+        setMissedAmount(Number(data.customer.balanceDue).toFixed(2));
+      }
+      else setMissedLookupError("❌ Customer not found.");
+    } catch { setMissedLookupError("🌐 Network error."); }
+    finally { setMissedLookingUp(false); }
+  };
+
+  const handleSaveMissedPayment = async () => {
+    if (!missedFoundCustomer || !missedAmount || Number(missedAmount) <= 0 || !missedDate) {
+      setMissedSubmitResult({ success: false, message: "Please choose a valid amount and entry date." });
+      return;
+    }
+    setMissedSubmitting(true); setMissedSubmitResult(null);
+    try {
+      const res = await fetch("/api/payments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          customerId: missedFoundCustomer.customerId,
+          amountPaid: Number(missedAmount),
+          recordedBy: "ADMIN",
+          note: missedNote.trim() ? `[Backdated] ${missedNote.trim()}` : "[Backdated missed entry]",
+          customDate: missedDate // Sent to API override block
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setMissedSubmitResult({ success: true, message: "✓ Backdated cash record injected successfully!" });
+        setMissedCustomerId(""); setMissedFoundCustomer(null); setMissedAmount(""); setMissedDate(""); setMissedNote("");
+        setTodayData(null); setMonthlyData(null); // Clears state cache so lists pull freshly
+      } else {
+        setMissedSubmitResult({ success: false, message: data.error });
+      }
+    } catch { setMissedSubmitResult({ success: false, message: "Network structural failure." }); }
+    finally { setMissedSubmitting(false); }
+  };
+
+  const getGreeting = () => {
+    const hr = new Date().getHours();
+    if (hr < 12) return "Good morning, Raju ☀️";
+    if (hr < 17) return "Good afternoon, Raju 🌤️";
+    if (hr < 21) return "Good evening, Raju 🌙";
+    return "Good night, Raju 💤";
+  };
+
   const handleEditSearch = async () => {
     if (!editSearchId.trim()) return;
     setEditSearching(true); setEditSearchError(""); setEditCustomer(null); setEditResult(null);
@@ -286,22 +388,33 @@ export default function AdminPage() {
         setEditCustomer(data.customer); setEditPackageId(data.customer.packageId);
         setEditExpiryDate(new Date(data.customer.expiryDate).toISOString().split("T")[0]);
         setEditAddress(data.customer.address || "");
+        setEditBalanceDue(Number(data.customer.balanceDue).toString());
       } else setEditSearchError("❌ Customer not found.");
     } catch { setEditSearchError("🌐 Network error."); }
     finally { setEditSearching(false); }
   };
 
   const handleEditSave = async () => {
-    if (!editCustomer || !editPackageId || !editExpiryDate) return;
+    if (!editCustomer || !editPackageId) return;
     setEditSaving(true); setEditResult(null);
     try {
-      const res = await fetch("/api/customers/update", {
-        method: "PATCH",
+      const res = await fetch("/api/customers", {
+        method: "PUT",
         headers: { "Content-Type": "application/json", "x-admin-password": getPassword() },
-        body: JSON.stringify({ customerId: editCustomer.customerId, packageId: editPackageId, expiryDate: editExpiryDate, address: editAddress }),
+        body: JSON.stringify({
+          id: editCustomer.id,
+          packageId: editPackageId,
+          customExpiryDate: editExpiryDate || undefined,
+          address: editAddress,
+          manualBalanceAdjust: editBalanceDue !== "" ? Number(editBalanceDue) : undefined
+        }),
       });
       const data = await res.json();
-      if (data.success) { setEditResult({ success: true, message: "Customer updated successfully!" }); setEditCustomer(data.customer); }
+      if (data.success) {
+        setEditResult({ success: true, message: "✏️ Customer changes saved perfectly!" });
+        setEditCustomer(data.customer);
+        setTodayData(null);
+      }
       else setEditResult({ success: false, message: data.error || "Update failed." });
     } catch { setEditResult({ success: false, message: "Network error." }); }
     finally { setEditSaving(false); }
@@ -322,16 +435,17 @@ export default function AdminPage() {
   const handleDeleteCustomer = async () => {
     if (!delCustomer || !delConfirm) return;
     setDeleting(true); setDelResult(null);
+    const deletedId = delCustomer.customerId;
     try {
-      const res = await fetch("/api/customers/delete", {
+      const res = await fetch(`/api/customers?id=${encodeURIComponent(delCustomer.id)}`, {
         method: "DELETE",
-        headers: { "Content-Type": "application/json", "x-admin-password": getPassword() },
-        body: JSON.stringify({ customerId: delCustomer.customerId }),
+        headers: { "x-admin-password": getPassword() }
       });
       const data = await res.json();
       if (data.success) {
-        setDelResult({ success: true, message: `Customer ${delCustomer.customerId} deleted.` });
+        setDelResult({ success: true, message: `🗑️ Customer "${deletedId}" has been completely deleted.` });
         setDelCustomer(null); setDelSearchId(""); setDelConfirm(false);
+        setTodayData(null);
       } else setDelResult({ success: false, message: data.error || "Delete failed." });
     } catch { setDelResult({ success: false, message: "Network error." }); }
     finally { setDeleting(false); }
@@ -343,6 +457,9 @@ export default function AdminPage() {
     }
     setAddingCust(true); setAddCustResult(null);
     try {
+      const selectedPkg = packages.find(p => p.id === newCust.packageId);
+      const isOther = selectedPkg?.name?.toUpperCase() === "OTHER";
+
       const res = await fetch("/api/customers", {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-admin-password": getPassword() },
@@ -352,45 +469,48 @@ export default function AdminPage() {
           address: newCust.address.trim() || null,
           packageId: newCust.packageId,
           cycleStartDate: newCust.cycleStartDate || undefined,
+          customExpiryDate: newCust.customExpiryDate || undefined,
+          customPrice: isOther && newCust.customPrice ? Number(newCust.customPrice) : undefined
         }),
       });
       const data = await res.json();
       if (data.success) {
-        setAddCustResult({ success: true, message: `Customer ${newCust.customerId.toUpperCase()} added successfully!` });
-        setNewCust({ customerId: "", name: "", address: "", packageId: "", cycleStartDate: "" });
+        setAddCustResult({ success: true, message: `➕ Customer ${newCust.customerId.toUpperCase()} initialized safely.` });
+        setNewCust({ customerId: "", name: "", address: "", packageId: "", cycleStartDate: "", customExpiryDate: "", customPrice: "" });
+        setTodayData(null);
       } else setAddCustResult({ success: false, message: data.error });
     } catch { setAddCustResult({ success: false, message: "Network error." }); }
     finally { setAddingCust(false); }
   };
 
   const handleCreatePackage = async () => {
-    if (!newPkg.name || !newPkg.price || !newPkg.durationDays) {
-      setPkgResult({ success: false, message: "All fields are required." }); return;
+    if (!newPkg.name) {
+      setPkgResult({ success: false, message: "Package name is required." }); return;
     }
     setSavingPkg(true); setPkgResult(null);
     try {
       const res = await fetch("/api/packages", {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-admin-password": getPassword() },
-        body: JSON.stringify({ name: newPkg.name, price: Number(newPkg.price), durationDays: Number(newPkg.durationDays) }),
+        body: JSON.stringify({ name: newPkg.name, price: Number(newPkg.price || 0), durationDays: Number(newPkg.durationDays || 30) }),
       });
       const data = await res.json();
-      if (data.success) { setPkgResult({ success: true, message: `"${newPkg.name}" created!` }); setNewPkg({ name: "", price: "", durationDays: "" }); loadPackages(); }
+      if (data.success) { setPkgResult({ success: true, message: `Pack "${newPkg.name}" deployed!` }); setNewPkg({ name: "", price: "", durationDays: "" }); loadPackages(); }
       else setPkgResult({ success: false, message: data.error });
     } catch { setPkgResult({ success: false, message: "Network error." }); }
     finally { setSavingPkg(false); }
   };
 
   const handleDeletePackage = async (pkgId, pkgName) => {
-    if (!window.confirm(`Delete package "${pkgName}"? This cannot be undone.`)) return;
+    if (!window.confirm(`Archive package "${pkgName}"? This will safely remove it from selection models.`)) return;
     setDeletingPkgId(pkgId); setPkgDeleteResult(null);
     try {
-      const res = await fetch(`/api/packages/${pkgId}`, {
+      const res = await fetch(`/api/packages?id=${pkgId}`, {
         method: "DELETE",
         headers: { "x-admin-password": getPassword() },
       });
       const data = await res.json();
-      if (data.success) { setPkgDeleteResult({ success: true, message: `"${pkgName}" deleted.` }); loadPackages(); }
+      if (data.success) { setPkgDeleteResult({ success: true, message: `"${pkgName}" isolated into archives.` }); loadPackages(); }
       else setPkgDeleteResult({ success: false, message: data.error });
     } catch { setPkgDeleteResult({ success: false, message: "Network error." }); }
     finally { setDeletingPkgId(null); }
@@ -404,6 +524,7 @@ export default function AdminPage() {
     try {
       const res = await fetch("/api/customers/import", { method: "POST", headers: { "x-admin-password": getPassword() }, body: formData });
       setImportResult(await res.json());
+      setTodayData(null);
     } catch { setImportResult({ success: false, error: "Network error." }); }
     finally { setImporting(false); setImportFile(null); }
   };
@@ -426,26 +547,29 @@ export default function AdminPage() {
 
   const handleLogout = () => { sessionStorage.removeItem("adminPassword"); setAuthed(false); setPassword(""); setTodayData(null); setMonthlyData(null); };
 
-  const inputCls = "w-full border-2 border-slate-300 rounded-xl px-3 py-3.5 text-lg font-bold text-slate-800 focus:outline-none focus:border-violet-500 bg-slate-50/50 placeholder:font-normal placeholder:text-slate-400";
+  const inputCls = "w-full border-2 border-slate-300 rounded-2xl px-4 py-4 text-lg font-black text-slate-800 focus:outline-none focus:border-indigo-600 bg-slate-50/80 placeholder:font-normal placeholder:text-slate-400/80 transition-all shadow-sm";
+
+  const selectedNewPkg = packages.find(p => p.id === newCust.packageId);
+  const showCustomPriceField = selectedNewPkg?.name?.toUpperCase() === "OTHER";
 
   if (!authed) {
     return (
-      <div className="min-h-[85vh] flex items-center justify-center px-2 py-6">
+      <div className="min-h-[90vh] flex items-center justify-center px-3 py-10">
         <div className="w-full max-w-md">
-          <div className="bg-white rounded-2xl shadow-md border border-slate-200/80 overflow-hidden">
-            <div className="bg-slate-50 border-b border-slate-100 px-4 py-6 text-center">
-              <div className="text-5xl mb-3 select-none">🔒</div>
-              <h1 className="text-slate-800 text-xl font-black tracking-wide uppercase leading-none">Admin Area</h1>
-              <p className="text-slate-500 text-xs font-bold mt-2 uppercase tracking-wider">Unlocks high-level dashboard</p>
+          <div className="bg-white rounded-3xl shadow-xl border border-slate-200 overflow-hidden">
+            <div className="bg-slate-900 px-6 py-8 text-center">
+              <div className="text-6xl mb-4 select-none">🔒</div>
+              <h1 className="text-white text-xl font-black tracking-wide uppercase">Cable Admin Portal</h1>
+              <p className="text-slate-400 text-xs font-bold mt-2 tracking-wider uppercase">Secure Management Pipeline</p>
             </div>
-            <div className="p-4 space-y-4">
+            <div className="p-6 space-y-5">
               <div>
-                <label className="block text-xs font-black text-slate-600 uppercase tracking-wider mb-1.5">Enter Password</label>
-                <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} onKeyDown={(e) => e.key === "Enter" && verifyPassword(password.trim())} placeholder="••••••••" className={inputCls + " tracking-widest"} autoComplete="current-password" />
+                <label className="block text-xs font-black text-slate-600 uppercase tracking-wider mb-2">System Password</label>
+                <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} onKeyDown={(e) => e.key === "Enter" && verifyPassword(password.trim())} placeholder="••••••••" className={inputCls + " tracking-widest text-center text-2xl"} autoComplete="current-password" />
               </div>
-              {authError && <p className="text-rose-600 bg-rose-50 border border-rose-200 font-bold text-sm px-3 py-2 rounded-xl text-center">{authError}</p>}
-              <button onClick={() => verifyPassword(password.trim())} disabled={authChecking} className="w-full bg-slate-900 hover:bg-slate-800 text-white text-base font-black py-4 rounded-xl uppercase tracking-wider transition-colors touch-manipulation shadow-md active:scale-[0.99]">
-                {authChecking ? "Checking..." : "Unlock System ✨"}
+              {authError && <p className="text-rose-700 font-black text-sm bg-rose-50 border-2 border-rose-200 px-4 py-3 rounded-2xl text-center">{authError}</p>}
+              <button onClick={() => verifyPassword(password.trim())} disabled={authChecking} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white text-lg font-black py-4.5 rounded-2xl uppercase tracking-wider transition-all shadow-md active:scale-[0.98]">
+                {authChecking ? "Verifying..." : "Unlock Dashboard 🔓"}
               </button>
             </div>
           </div>
@@ -455,121 +579,241 @@ export default function AdminPage() {
   }
 
   return (
-    <div className="space-y-6 pb-24 px-2 max-w-2xl mx-auto sm:px-4 pt-2">
-
-      {/* Top Banner Row */}
-      <div className="flex items-center justify-between gap-4 bg-white border border-slate-200/80 px-4 py-3 rounded-2xl shadow-md">
-        <h1 className="text-base font-black text-slate-800 tracking-wide uppercase leading-none">Admin Section</h1>
-        <button onClick={handleLogout} className="text-xs text-rose-600 font-black border-2 border-slate-200 hover:bg-slate-50 px-4 py-2.5 rounded-xl transition-colors touch-manipulation uppercase">
-          logout
+    <div className="space-y-6 pb-32 px-3 max-w-2xl mx-auto pt-4 sm:px-4">
+      <div className="flex items-center justify-between gap-4 bg-white border-2 border-slate-200 px-5 py-4 rounded-3xl shadow-sm">
+        <div>
+          <h1 className="text-xl font-black text-slate-900 tracking-tight leading-none">
+            Admin Dashboard
+          </h1>
+          <p className="text-slate-500 font-bold text-xs mt-1">
+            {getGreeting()}
+          </p>
+        </div>
+        <button
+          onClick={handleLogout}
+          className="text-xs text-rose-700 font-black border-2 border-rose-200 bg-rose-50/50 hover:bg-rose-50 px-4 py-3 rounded-xl transition-all uppercase tracking-wider"
+        >
+          Logout
         </button>
       </div>
 
-      {/* Primary Category Switcher Tabs */}
-      <div className="flex bg-slate-900 rounded-2xl p-1.5 gap-1.5 border border-slate-950 shadow-md">
-        {[{ key: "today", label: "📅 Today" }, { key: "monthly", label: "📊 Monthly" }, { key: "tools", label: "🛠️ Tools" }].map((tab) => (
-          <button key={tab.key} onClick={() => setActiveTab(tab.key)}
-            className={`flex-1 py-3.5 rounded-xl text-xs sm:text-sm font-black transition-all touch-manipulation uppercase active:scale-[0.98] ${activeTab === tab.key ? "bg-white text-slate-950 shadow-sm" : "text-slate-400 hover:text-white"}`}>
+      <div className="flex bg-slate-900 rounded-2xl p-2 gap-1 border-2 border-slate-950 shadow-md">
+        {[
+          { key: "today", label: "Daily Records" },
+          { key: "monthly", label: "Monthly Records" },
+          { key: "tools", label: "Admin Tools" },
+        ].map((tab) => (
+          <button
+            key={tab.key}
+            onClick={() => setActiveTab(tab.key)}
+            className={`flex-1 py-3 rounded-xl text-xs sm:text-sm font-black transition-all px-1 uppercase active:scale-[0.97] ${activeTab === tab.key ? "bg-white text-slate-950 shadow-sm font-black" : "text-slate-400 hover:text-white"}`}
+          >
             {tab.label}
           </button>
         ))}
       </div>
 
-      {/* ============================================================ */}
-      {/* TODAY TAB                                                     */}
-      {/* ============================================================ */}
       {activeTab === "today" && (
         <div className="space-y-6">
-          {loadingToday && <div className="text-center text-slate-500 py-12 font-bold text-base animate-pulse">🔄 Loading metrics list...</div>}
+          {loadingToday && (
+            <div className="text-center text-indigo-600 py-12 font-black text-lg animate-pulse">
+              🔄 Fetching Live Ledgers...
+            </div>
+          )}
           {todayData && (
             <>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <SummaryCard label="Paid Today" value={formatRupees(todayData.summary.totalPaid)} color="bg-emerald-50/70 border-emerald-300" icon="💰" />
-                <SummaryCard label="Due Today" value={formatRupees(todayData.summary.totalDue)} color="bg-rose-50/70 border-rose-300" icon="⏳" />
-                <SummaryCard label="Collected Logs" value={`${todayData.summary.paidCount} Rows`} color="bg-sky-50/70 border-sky-300" icon="✅" />
-                <SummaryCard label="Pending Houses" value={`${todayData.summary.dueCount} Houses`} color="bg-amber-50/70 border-amber-300" icon="🔔" />
+                <SummaryCard
+                  label="Total Collected "
+                  value={formatRupees(todayData.summary.totalPaid)}
+                  color="bg-emerald-50 border-emerald-300"
+                  icon="💵"
+                />
+                <SummaryCard
+                  label="Pending Balance"
+                  value={formatRupees(todayData.summary.totalDue)}
+                  color="bg-rose-50 border-rose-300"
+                  icon="⏳"
+                />
+                <SummaryCard
+                  label="Paid Houses"
+                  value={`${todayData.summary.paidCount} Receipts`}
+                  color="bg-sky-50 border-sky-300"
+                  icon="🏠"
+                />
+                <SummaryCard
+                  label="Remaining Houses"
+                  value={`${todayData.summary.dueCount} Left`}
+                  color="bg-amber-50 border-amber-300"
+                  icon="🚶"
+                />
               </div>
-              <button onClick={loadToday} className="w-full py-4 border-2 border-slate-300 bg-white text-slate-800 font-black rounded-xl hover:bg-slate-50 shadow-md text-sm uppercase tracking-wider active:scale-[0.99] touch-manipulation transition-colors">🔄 Sync Live Records</button>
+              <button
+                onClick={loadToday}
+                className="w-full py-4 border-2 border-slate-300 bg-white text-slate-800 font-black rounded-2xl hover:bg-slate-50 shadow-sm text-sm uppercase tracking-wider active:scale-[0.99] transition-all"
+              >
+                Refresh Screen
+              </button>
 
-              {/* Admin Bill Collection Card */}
-              <div className="bg-white rounded-2xl border border-slate-200/80 shadow-md overflow-hidden">
-                <div className="bg-slate-50 border-b border-slate-100 px-4 py-4">
-                  <h2 className="text-slate-800 text-lg font-black tracking-wide uppercase leading-none">Quick Record Payment</h2>
-                </div>
-                <div className="p-4 space-y-5">
+              <div className="bg-white rounded-3xl border-2 border-slate-200 shadow-sm overflow-hidden">
+                <ToolHeader
+                  title="Quick Payment - Admin"
+                  subtitle="Instantly register incoming customer payments"
+                />
+                <div className="p-5 space-y-5">
                   <div>
-                    <label className="block text-xs font-black text-slate-600 uppercase tracking-wider mb-1.5">Customer ID <span className="text-rose-500">*</span></label>
-                    <div className="grid grid-cols-12 gap-2">
-                      <div className="col-span-8 sm:col-span-9">
-                        <input type="text" value={adminCustomerId}
-                          onChange={(e) => { setAdminCustomerId(e.target.value.toUpperCase()); setAdminFoundCustomer(null); setAdminCustomerError(""); setAdminSubmitResult(null); }}
-                          onKeyDown={(e) => e.key === "Enter" && handleAdminLookup()}
-                          placeholder="E.G. C001" className={inputCls + " uppercase tracking-wider"} />
-                      </div>
-                      <div className="col-span-4 sm:col-span-3">
-                        <button onClick={handleAdminLookup} disabled={adminLookingUp || !adminCustomerId.trim()}
-                          className="w-full h-full bg-slate-900 hover:bg-slate-800 disabled:bg-slate-200 disabled:text-slate-400 text-white font-black rounded-xl text-xs sm:text-sm tracking-wider uppercase transition-colors touch-manipulation flex items-center justify-center">
-                          {adminLookingUp ? "..." : "FIND"}
-                        </button>
-                      </div>
+                    <label className="block text-xs font-black text-slate-600 uppercase tracking-wider mb-2">
+                      Enter Customer ID{" "}
+                      <span className="text-rose-500 font-black">*</span>
+                    </label>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={adminCustomerId}
+                        onChange={(e) => {
+                          setAdminCustomerId(e.target.value.toUpperCase());
+                          setAdminFoundCustomer(null);
+                          setAdminCustomerError("");
+                          setAdminSubmitResult(null);
+                        }}
+                        onKeyDown={(e) =>
+                          e.key === "Enter" && handleAdminLookup()
+                        }
+                        placeholder="E.G. S-06"
+                        className={
+                          inputCls + " uppercase tracking-wider flex-1"
+                        }
+                      />
+                      <button
+                        onClick={handleAdminLookup}
+                        disabled={adminLookingUp || !adminCustomerId.trim()}
+                        className="bg-slate-900 hover:bg-slate-800 disabled:bg-slate-200 disabled:text-slate-400 text-white font-black px-6 rounded-2xl text-sm tracking-wider uppercase transition-all shrink-0 min-w-[90px]"
+                      >
+                        {adminLookingUp ? "..." : "SEARCH"}
+                      </button>
                     </div>
                   </div>
 
-                  {adminCustomerError && <p className="text-rose-600 font-bold text-sm bg-rose-50 border border-rose-200 px-3 py-2 rounded-xl">{adminCustomerError}</p>}
+                  {adminCustomerError && (
+                    <p className="text-rose-700 font-black text-sm bg-rose-50 border-2 border-rose-200 px-4 py-3 rounded-2xl">
+                      {adminCustomerError}
+                    </p>
+                  )}
 
                   {adminFoundCustomer && (
-                    <div className="bg-violet-50/60 border-2 border-violet-200 rounded-xl p-4 space-y-3">
-                      <p className="font-black text-slate-900 text-xl leading-tight">{adminFoundCustomer.name}</p>
-                      {adminFoundCustomer.address && <p className="text-xs font-bold text-slate-600">📍 {adminFoundCustomer.address}</p>}
-                      <div className="text-xs font-bold text-slate-500 pt-1 flex flex-wrap gap-x-4 gap-y-1">
-                        <span>ID: <span className="text-slate-900 font-mono font-black">{adminFoundCustomer.customerId}</span></span>
-                        <span>Outstanding: <span className="font-black text-rose-600 text-sm">{formatRupees(adminFoundCustomer.balanceDue)}</span></span>
+                    <div className="bg-indigo-50 border-2 border-indigo-200 rounded-2xl p-5 space-y-3">
+                      <p className="font-black text-slate-900 text-2xl leading-tight">
+                        {adminFoundCustomer.name}
+                      </p>
+                      {adminFoundCustomer.address && (
+                        <p className="text-sm font-bold text-slate-600">
+                          📍 {adminFoundCustomer.address}
+                        </p>
+                      )}
+                      <div className="text-xs font-black text-slate-500 pt-1 flex flex-wrap gap-x-4 gap-y-1 bg-white px-3 py-2 rounded-xl border border-indigo-100">
+                        <span>
+                          ID:{" "}
+                          <span className="text-slate-900 font-mono font-black text-sm">
+                            {adminFoundCustomer.customerId}
+                          </span>
+                        </span>
+                        <span>
+                          Outstanding Due:{" "}
+                          <span className="font-black text-rose-600 text-sm">
+                            {formatRupees(adminFoundCustomer.balanceDue)}
+                          </span>
+                        </span>
                       </div>
                     </div>
                   )}
 
                   <div>
-                    <label className="block text-xs font-black text-slate-600 uppercase tracking-wider mb-1.5">Amount Received (₹) <span className="text-rose-500">*</span></label>
-                    <input type="number" value={adminAmountPaid} onChange={(e) => setAdminAmountPaid(e.target.value)} placeholder="0.00"
-                      className="w-full border-2 border-slate-300 rounded-xl px-4 py-3.5 text-3xl font-black text-emerald-700 bg-slate-50/50 focus:outline-none focus:border-emerald-500 placeholder:text-slate-300 shadow-sm" inputMode="decimal" />
+                    <label className="block text-xs font-black text-slate-600 uppercase tracking-wider mb-2">
+                      Amount Collected (₹){" "}
+                      <span className="text-rose-500 font-black">*</span>
+                    </label>
+                    <input
+                      type="number"
+                      value={adminAmountPaid}
+                      onChange={(e) => setAdminAmountPaid(e.target.value)}
+                      placeholder="0.00"
+                      className="w-full border-2 border-slate-300 rounded-2xl px-4 py-4 text-4xl font-black text-emerald-700 bg-slate-50 focus:outline-none focus:border-emerald-500 placeholder:text-slate-300 shadow-inner text-center"
+                      inputMode="decimal"
+                    />
                   </div>
 
                   <div>
-                    <label className="block text-xs font-black text-slate-600 uppercase tracking-wider mb-1.5">Remarks / Note</label>
-                    <input type="text" value={adminNote} onChange={(e) => setAdminNote(e.target.value)} placeholder="Optional cash details..." className={inputCls} />
+                    <label className="block text-xs font-black text-slate-600 uppercase tracking-wider mb-2">
+                      Collection Notes (Optional)
+                    </label>
+                    <input
+                      type="text"
+                      value={adminNote}
+                      onChange={(e) => setAdminNote(e.target.value)}
+                      placeholder="Optional cash or date notes..."
+                      className={inputCls}
+                    />
                   </div>
 
                   {adminSubmitResult && (
-                    <div className={`rounded-xl px-4 py-3.5 font-bold border-2 ${adminSubmitResult.success ? "bg-emerald-50 text-emerald-900 border-emerald-300" : "bg-rose-50 text-rose-900 border-rose-300"}`}>
-                      {adminSubmitResult.success ? "✅ SUCCESS: " : "❌ ERROR: "}{adminSubmitResult.message}
+                    <div
+                      className={`rounded-2xl px-4 py-4 font-black border-2 text-center text-base shadow-sm ${adminSubmitResult.success ? "bg-emerald-50 text-emerald-900 border-emerald-400" : "bg-rose-50 text-rose-900 border-rose-400"}`}
+                    >
+                      {adminSubmitResult.message}
                     </div>
                   )}
 
-                  <button onClick={handleAdminPayment} disabled={adminSubmitting || !adminFoundCustomer}
-                    className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-100 disabled:text-slate-400 text-white text-lg font-black py-4 rounded-xl shadow-md transition-colors active:scale-[0.99] uppercase tracking-wider touch-manipulation">
-                    {adminSubmitting ? "Saving Payment..." : "Confirm & Save (✓)"}
+                  <button
+                    onClick={handleAdminPayment}
+                    disabled={adminSubmitting || !adminFoundCustomer}
+                    className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-100 disabled:text-slate-400 text-white text-xl font-black py-5 rounded-2xl shadow-md transition-all uppercase tracking-wider active:scale-[0.99]"
+                  >
+                    {adminSubmitting
+                      ? "Processing Collection..."
+                      : "Save Payment (✓)"}
                   </button>
                 </div>
               </div>
 
-              {/* Transaction Logs */}
-              <div className="bg-white rounded-2xl border border-slate-200/80 shadow-md overflow-hidden">
-                <div className="px-4 py-4 border-b border-slate-200 bg-slate-50">
-                  <h2 className="font-black text-base text-slate-800 uppercase tracking-wide">Collected Logs Today ({todayData.payments.length})</h2>
-                </div>
-                {todayData.payments.length === 0
-                  ? <p className="px-4 py-12 text-center text-slate-400 font-bold">No transactions logged today.</p>
-                  : <div className="divide-y divide-slate-200/60">{todayData.payments.map((p) => <PaymentRow key={p.id} payment={p} />)}</div>}
+              <div className="bg-white rounded-3xl border-2 border-slate-200 shadow-sm overflow-hidden">
+                <ToolHeader
+                  title="Collection Log Sheet - Today"
+                  subtitle={`${todayData.payments.length} Records Registered Today`}
+                />
+                {todayData.payments.length === 0 ? (
+                  <p className="px-4 py-12 text-center text-slate-400 font-black">
+                    No collections saved today yet.
+                  </p>
+                ) : (
+                  <div className="divide-y divide-slate-200/60">
+                    {todayData.payments.map((p) => (
+                      <PaymentRow
+                        key={p.id}
+                        payment={p}
+                        onDelete={handleDeletePayment}
+                        isDeleting={deletingPaymentId === p.id}
+                      />
+                    ))}
+                  </div>
+                )}
               </div>
 
-              {/* Pending Walklist */}
               {todayData.walklist?.length > 0 && (
-                <div className="bg-white rounded-2xl border border-slate-200/80 shadow-md overflow-hidden">
-                  <div className="px-4 py-4 border-b border-slate-200 bg-slate-50">
-                    <h2 className="font-black text-base text-slate-800 uppercase tracking-wide">Unpaid Houses Remaining ({todayData.summary.dueCount})</h2>
+                <div className="bg-white rounded-3xl border-2 border-slate-200 shadow-sm overflow-hidden">
+                  <div className="bg-amber-600 px-5 py-4">
+                    <h2 className="text-white text-lg font-black tracking-wide uppercase">
+                      🚶 Pending Walk-list Houses
+                    </h2>
+                    <p className="text-white/80 text-xs font-bold mt-1 tracking-wider uppercase">
+                      Unpaid Houses Remaining
+                    </p>
                   </div>
                   <div className="divide-y divide-slate-200/60">
-                    {todayData.walklist.filter((c) => !todayData.paidCustomerIds?.includes(c.id)).map((c) => <DueCustomerRow key={c.id} customer={c} />)}
+                    {todayData.walklist
+                      .filter((c) => !todayData.paidCustomerIds?.includes(c.id))
+                      .map((c) => (
+                        <DueCustomerRow key={c.id} customer={c} />
+                      ))}
                   </div>
                 </div>
               )}
@@ -578,37 +822,86 @@ export default function AdminPage() {
         </div>
       )}
 
-      {/* ============================================================ */}
-      {/* MONTHLY TAB                                                   */}
-      {/* ============================================================ */}
       {activeTab === "monthly" && (
         <div className="space-y-6">
-          {loadingMonthly && <div className="text-center text-slate-500 py-12 font-bold text-base animate-pulse">🔄 Analyzing monthly logs...</div>}
+          {loadingMonthly && (
+            <div className="text-center text-indigo-600 py-12 font-black text-lg animate-pulse">
+              📊 Compiling Full Ledger Calculations...
+            </div>
+          )}
           {monthlyData && (
             <>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <SummaryCard label="Paid This Month" value={formatRupees(monthlyData.summary.totalPaid)} color="bg-emerald-50/70 border-emerald-300" icon="💰" />
-                <SummaryCard label="Total Outstanding" value={formatRupees(monthlyData.summary.totalDue)} color="bg-rose-50/70 border-rose-300" icon="⏳" />
-                <SummaryCard label="Paid Users" value={`${monthlyData.summary.paidCount} Houses`} color="bg-sky-50/70 border-sky-300" icon="✅" />
-                <SummaryCard label="Unpaid Balance" value={`${monthlyData.summary.dueCount} Users`} color="bg-amber-50/70 border-amber-300" icon="🔔" />
+                <SummaryCard
+                  label="Paid This Month"
+                  value={formatRupees(monthlyData.summary.totalPaid)}
+                  color="bg-emerald-50 border-emerald-300"
+                  icon="📊"
+                />
+                <SummaryCard
+                  label="Total Outstanding"
+                  value={formatRupees(monthlyData.summary.totalDue)}
+                  color="bg-rose-50 border-rose-300"
+                  icon="⏳"
+                />
+                <SummaryCard
+                  label="Paid Accounts"
+                  value={`${monthlyData.summary.paidCount} Houses`}
+                  color="bg-sky-50 border-sky-300"
+                  icon="✅"
+                />
+                <SummaryCard
+                  label="Unpaid Accounts"
+                  value={`${monthlyData.summary.dueCount} Users`}
+                  color="bg-amber-50 border-amber-300"
+                  icon="🔔"
+                />
               </div>
-              <button onClick={() => { setMonthlyData(null); loadMonthly(); }} className="w-full py-4 border-2 border-slate-300 bg-white text-slate-800 font-black rounded-xl hover:bg-slate-50 shadow-md text-sm uppercase tracking-wider active:scale-[0.99] touch-manipulation transition-colors">🔄 Re-Calculate Ledger</button>
+              <button
+                onClick={() => loadMonthly(true)}
+                className="w-full py-4 border-2 border-slate-300 bg-white text-slate-800 font-black rounded-2xl hover:bg-slate-50 shadow-sm text-sm uppercase tracking-wider active:scale-[0.99] transition-all"
+              >
+                Refresh Monthly Sheet
+              </button>
 
-              <div className="bg-white rounded-2xl border border-slate-200/80 shadow-md overflow-hidden">
-                <div className="px-4 py-4 border-b border-slate-200 bg-slate-50">
-                  <h2 className="font-black text-base text-slate-800 uppercase tracking-wide">Monthly Ledger Rows ({monthlyData.payments.length})</h2>
-                </div>
-                {monthlyData.payments.length === 0
-                  ? <p className="px-4 py-12 text-center text-slate-400 font-bold">No entries registered this month.</p>
-                  : <div className="divide-y divide-slate-200/60">{monthlyData.payments.map((p) => <PaymentRow key={p.id} payment={p} />)}</div>}
+              <div className="bg-white rounded-3xl border-2 border-slate-200 shadow-sm overflow-hidden">
+                <ToolHeader
+                  title="Monthly Payment Records"
+                  subtitle={`${monthlyData.payments.length} Total Logs on File`}
+                />
+                {monthlyData.payments.length === 0 ? (
+                  <p className="px-4 py-12 text-center text-slate-400 font-black">
+                    No collection records found for this period.
+                  </p>
+                ) : (
+                  <div className="divide-y divide-slate-200/60">
+                    {monthlyData.payments.map((p) => (
+                      <PaymentRow
+                        key={p.id}
+                        payment={p}
+                        onDelete={handleDeletePayment}
+                        isDeleting={deletingPaymentId === p.id}
+                      />
+                    ))}
+                  </div>
+                )}
               </div>
 
               {monthlyData.dueCustomers?.length > 0 && (
-                <div className="bg-white rounded-2xl border border-slate-200/80 shadow-md overflow-hidden">
-                  <div className="px-4 py-4 border-b border-slate-200 bg-slate-50">
-                    <h2 className="font-black text-base text-slate-800 uppercase tracking-wide">Defaulters / Pending List ({monthlyData.dueCustomers.length})</h2>
+                <div className="bg-white rounded-3xl border-2 border-slate-200 shadow-sm overflow-hidden">
+                  <div className="bg-slate-900 px-5 py-4">
+                    <h2 className="text-white text-lg font-black tracking-wide uppercase">
+                      Due / Unpaid Accounts
+                    </h2>
+                    <p className="text-white/70 text-xs font-bold mt-1 tracking-wider uppercase">
+                      {monthlyData.dueCustomers.length} Total Users Unpaid
+                    </p>
                   </div>
-                  <div className="divide-y divide-slate-200/60">{monthlyData.dueCustomers.map((c) => <DueCustomerRow key={c.id} customer={c} />)}</div>
+                  <div className="divide-y divide-slate-200/60">
+                    {monthlyData.dueCustomers.map((c) => (
+                      <DueCustomerRow key={c.id} customer={c} />
+                    ))}
+                  </div>
                 </div>
               )}
             </>
@@ -616,60 +909,137 @@ export default function AdminPage() {
         </div>
       )}
 
-      {/* ============================================================ */}
-      {/* TOOLS TAB                                                     */}
-      {/* ============================================================ */}
       {activeTab === "tools" && (
         <div className="space-y-6">
-
           {/* EDIT CUSTOMER */}
-          <div className="bg-white rounded-2xl border border-slate-200/80 shadow-md overflow-hidden">
-            <ToolHeader color="bg-violet-700" title="✏️ Edit Customer Profile" subtitle="Modify plan settings or parameters" />
-            <div className="p-4 space-y-4">
+          <div className="bg-white rounded-3xl border-2 border-slate-200 shadow-sm overflow-hidden">
+            <ToolHeader
+              title="Modify Customer Details"
+              subtitle="Change package plans, addresses or manually change due balances"
+              bgColor="bg-indigo-900"
+            />
+            <div className="p-5 space-y-4">
               <div>
-                <label className="block text-xs font-black text-slate-600 uppercase tracking-wider mb-1.5">Find Target ID</label>
+                <label className="block text-xs font-black text-slate-600 uppercase tracking-wider mb-2">
+                  Find Profile by Customer ID
+                </label>
                 <div className="flex gap-2">
-                  <input type="text" value={editSearchId}
-                    onChange={(e) => { setEditSearchId(e.target.value.toUpperCase()); setEditSearchError(""); setEditResult(null); }}
+                  <input
+                    type="text"
+                    value={editSearchId}
+                    onChange={(e) => {
+                      setEditSearchId(e.target.value.toUpperCase());
+                      setEditSearchError("");
+                      setEditResult(null);
+                    }}
                     onKeyDown={(e) => e.key === "Enter" && handleEditSearch()}
-                    placeholder="E.G. C001" className={inputCls + " uppercase tracking-wider flex-1 min-w-0"} />
-                  <button onClick={handleEditSearch} disabled={editSearching || !editSearchId.trim()}
-                    className="bg-violet-700 hover:bg-violet-800 disabled:bg-slate-200 disabled:text-slate-400 text-white font-black px-6 rounded-xl text-sm uppercase transition-colors shrink-0 touch-manipulation flex items-center justify-center">
-                    {editSearching ? "..." : "FIND"}
+                    placeholder="E.G. S-06"
+                    className={inputCls + " uppercase tracking-wider flex-1"}
+                  />
+                  <button
+                    onClick={handleEditSearch}
+                    disabled={editSearching || !editSearchId.trim()}
+                    className="bg-indigo-900 hover:bg-indigo-800 disabled:bg-slate-200 disabled:text-slate-400 text-white font-black px-6 rounded-2xl text-sm uppercase transition-all shrink-0 min-w-[90px]"
+                  >
+                    {editSearching ? "..." : "LOAD"}
                   </button>
                 </div>
               </div>
-              {editSearchError && <p className="text-rose-600 font-bold text-sm bg-rose-50 border border-rose-200 px-3 py-2 rounded-xl">{editSearchError}</p>}
+              {editSearchError && (
+                <p className="text-rose-700 font-black text-sm bg-rose-50 border-2 border-rose-200 px-4 py-3 rounded-2xl">
+                  {editSearchError}
+                </p>
+              )}
 
               {editCustomer && (
-                <div className="space-y-4 border-t border-slate-200/60 pt-4">
-                  <div className="bg-slate-50 border-2 border-slate-200 rounded-xl px-4 py-3">
-                    <p className="font-black text-slate-900">{editCustomer.customerId} — {editCustomer.name}</p>
-                    <p className="text-xs text-slate-500 font-bold mt-0.5">Plan: {editCustomer.package?.name} • Balance: <span className="text-rose-600 font-black">{formatRupees(editCustomer.balanceDue)}</span></p>
+                <div className="space-y-5 border-t-2 border-slate-100 pt-5">
+                  <div className="bg-slate-100 border-2 border-slate-200 rounded-2xl px-4 py-4">
+                    <p className="font-black text-slate-900 text-xl">
+                      {editCustomer.customerId} — {editCustomer.name}
+                    </p>
+                    <p className="text-sm font-bold text-slate-600 mt-1">
+                      Current Plan:{" "}
+                      <span className="text-slate-900 font-black">
+                        {editCustomer.packageName || "None"}
+                      </span>{" "}
+                      • Current Due:{" "}
+                      <span className="text-rose-600 font-black">
+                        {formatRupees(editCustomer.balanceDue)}
+                      </span>
+                    </p>
                   </div>
                   <div>
-                    <label className="block text-xs font-black text-slate-600 uppercase tracking-wider mb-1.5">Change Subscription Package</label>
-                    <select value={editPackageId} onChange={(e) => setEditPackageId(e.target.value)} className={inputCls}>
+                    <label className="block text-xs font-black text-slate-600 uppercase tracking-wider mb-2">
+                      Assign Subscription Plan (Updates instantly)
+                    </label>
+                    <select
+                      value={editPackageId}
+                      onChange={(e) => setEditPackageId(e.target.value)}
+                      className={inputCls + " h-[60px] text-base font-black"}
+                    >
                       <option value="">— Select Plan Option —</option>
-                      {packages.map((pkg) => <option key={pkg.id} value={pkg.id}>{pkg.name} — ₹{pkg.price} / {pkg.durationDays} Days</option>)}
+                      {packages.map((pkg) => (
+                        <option key={pkg.id} value={pkg.id}>
+                          {pkg.name} — ₹{pkg.price} / {pkg.durationDays} Days
+                        </option>
+                      ))}
                     </select>
                   </div>
                   <div>
-                    <label className="block text-xs font-black text-slate-600 uppercase tracking-wider mb-1.5">Adjust Expiry / Due Date</label>
-                    <input type="date" value={editExpiryDate} onChange={(e) => setEditExpiryDate(e.target.value)} className={inputCls} />
+                    <label className="block text-xs font-black text-slate-600 uppercase tracking-wider mb-2">
+                      Adjust Plan Expiry / Due Date
+                    </label>
+                    <input
+                      type="date"
+                      value={editExpiryDate}
+                      onChange={(e) => setEditExpiryDate(e.target.value)}
+                      className={inputCls}
+                    />
                   </div>
                   <div>
-                    <label className="block text-xs font-black text-slate-600 uppercase tracking-wider mb-1.5">Update Address</label>
-                    <input type="text" value={editAddress} onChange={(e) => setEditAddress(e.target.value)} placeholder="Street or Area address..." className={inputCls} />
+                    <label className="block text-xs font-black text-slate-600 uppercase tracking-wider mb-2">
+                      Manual Override Balance Due (₹)
+                    </label>
+                    <input
+                      type="number"
+                      value={editBalanceDue}
+                      onChange={(e) => setEditBalanceDue(e.target.value)}
+                      placeholder="Override absolute balance due amount..."
+                      className={inputCls}
+                      inputMode="decimal"
+                    />
+                    <p className="text-slate-500 text-xs font-bold mt-1">
+                      Use this to set custom rates if they cancel mid-month
+                      after 10-15 days.
+                    </p>
                   </div>
+                  <div>
+                    <label className="block text-xs font-black text-slate-600 uppercase tracking-wider mb-2">
+                      Home Installation Address
+                    </label>
+                    <input
+                      type="text"
+                      value={editAddress}
+                      onChange={(e) => setEditAddress(e.target.value)}
+                      placeholder="Street name or block details..."
+                      className={inputCls}
+                    />
+                  </div>
+
                   {editResult && (
-                    <div className={`rounded-xl px-4 py-3 font-bold text-sm border-2 ${editResult.success ? "bg-emerald-50 text-emerald-900 border-emerald-300" : "bg-rose-50 text-rose-900 border-rose-300"}`}>
-                      {editResult.success ? "✅ SUCCESS: " : "❌ ERROR: "}{editResult.message}
+                    <div
+                      className={`rounded-2xl px-4 py-4 font-black text-center text-base border-2 shadow-sm ${editResult.success ? "bg-emerald-50 text-emerald-900 border-emerald-400" : "bg-rose-50 text-rose-900 border-rose-400"}`}
+                    >
+                      {editResult.message}
                     </div>
                   )}
-                  <button onClick={handleEditSave} disabled={editSaving || !editPackageId || !editExpiryDate}
-                    className="w-full bg-violet-700 hover:bg-violet-800 disabled:bg-slate-100 disabled:text-slate-400 text-white text-base font-black py-4 rounded-xl shadow-md uppercase tracking-wider transition-colors touch-manipulation">
-                    {editSaving ? "Saving..." : "💾 Save Profile Modifications"}
+
+                  <button
+                    onClick={handleEditSave}
+                    disabled={editSaving || !editPackageId}
+                    className="w-full bg-indigo-900 hover:bg-indigo-800 disabled:bg-slate-100 disabled:text-slate-400 text-white text-base font-black py-4.5 rounded-2xl shadow-md uppercase tracking-wider transition-all"
+                  >
+                    {editSaving ? "Saving Profiles..." : "Save Changes"}
                   </button>
                 </div>
               )}
@@ -677,45 +1047,97 @@ export default function AdminPage() {
           </div>
 
           {/* DELETE CUSTOMER */}
-          <div className="bg-white rounded-2xl border border-slate-200/80 shadow-md overflow-hidden">
-            <ToolHeader color="bg-rose-700" title="🗑️ Delete Customer Account" subtitle="Irreversibly wipe user from data logs" />
-            <div className="p-4 space-y-4">
+          <div className="bg-white rounded-3xl border-2 border-slate-200 shadow-sm overflow-hidden">
+            <ToolHeader
+              title="Delete Customer"
+              subtitle="Permanently delete customers and cascade history out safely"
+              bgColor="bg-rose-800"
+            />
+            <div className="p-5 space-y-4">
               <div>
-                <label className="block text-xs font-black text-slate-600 uppercase tracking-wider mb-1.5">Search Deletion ID</label>
+                <label className="block text-xs font-black text-slate-600 uppercase tracking-wider mb-2">
+                  Enter Customer ID to Wipe
+                </label>
                 <div className="flex gap-2">
-                  <input type="text" value={delSearchId}
-                    onChange={(e) => { setDelSearchId(e.target.value.toUpperCase()); setDelSearchError(""); setDelResult(null); setDelConfirm(false); setDelCustomer(null); }}
+                  <input
+                    type="text"
+                    value={delSearchId}
+                    onChange={(e) => {
+                      setDelSearchId(e.target.value.toUpperCase());
+                      setDelSearchError("");
+                      setDelResult(null);
+                      setDelConfirm(false);
+                      setDelCustomer(null);
+                    }}
                     onKeyDown={(e) => e.key === "Enter" && handleDelSearch()}
-                    placeholder="E.G. C001" className={inputCls + " uppercase tracking-wider flex-1 min-w-0"} />
-                  <button onClick={handleDelSearch} disabled={delSearching || !delSearchId.trim()}
-                    className="bg-rose-700 hover:bg-rose-800 disabled:bg-slate-200 disabled:text-slate-400 text-white font-black px-6 rounded-xl text-sm uppercase transition-colors shrink-0 touch-manipulation flex items-center justify-center">
-                    {delSearching ? "..." : "FIND"}
+                    placeholder="e.g. S-06"
+                    className={inputCls + " uppercase tracking-wider flex-1"}
+                  />
+                  <button
+                    onClick={handleDelSearch}
+                    disabled={delSearching || !delSearchId.trim()}
+                    className="bg-rose-800 hover:bg-rose-700 disabled:bg-slate-200 disabled:text-slate-400 text-white font-black px-6 rounded-2xl text-sm uppercase transition-all shrink-0 min-w-[90px]"
+                  >
+                    {delSearching ? "..." : "LOAD"}
                   </button>
                 </div>
               </div>
-              {delSearchError && <p className="text-rose-600 font-bold text-sm bg-rose-50 border border-rose-200 px-3 py-2 rounded-xl">{delSearchError}</p>}
+              {delSearchError && (
+                <p className="text-rose-700 font-black text-sm bg-rose-50 border-2 border-rose-200 px-4 py-3 rounded-2xl">
+                  {delSearchError}
+                </p>
+              )}
+
+              {delResult && (
+                <div
+                  className={`rounded-2xl px-5 py-5 font-black text-center text-lg border-2 shadow-md ${delResult.success ? "bg-emerald-100 text-emerald-950 border-emerald-500 animate-bounce" : "bg-rose-100 text-rose-950 border-rose-500"}`}
+                >
+                  {delResult.message}
+                </div>
+              )}
 
               {delCustomer && (
-                <div className="space-y-4 border-t border-slate-200/60 pt-4">
-                  <div className="bg-rose-50 border-2 border-rose-200 rounded-xl p-4">
-                    <p className="font-black text-rose-950 text-base">{delCustomer.customerId} — {delCustomer.name}</p>
-                    {delCustomer.address && <p className="text-xs text-rose-600 font-bold mt-0.5">📍 {delCustomer.address}</p>}
-                    <p className="text-sm text-rose-800 font-black mt-1">{delCustomer.package?.name} • Balance: {formatRupees(delCustomer.balanceDue)}</p>
+                <div className="space-y-5 border-t-2 border-slate-100 pt-5">
+                  <div className="bg-rose-50 border-2 border-rose-200 rounded-2xl p-5 text-center">
+                    <p className="text-[11px] font-black tracking-widest text-rose-800 bg-white border border-rose-200 rounded px-2 py-0.5 inline-block uppercase mb-2">
+                      ACCOUNT SELECTED
+                    </p>
+                    <p className="font-black text-rose-950 text-2xl">
+                      {delCustomer.customerId} — {delCustomer.name}
+                    </p>
+                    {delCustomer.address && (
+                      <p className="text-sm font-bold text-rose-800 mt-1">
+                        📍 {delCustomer.address}
+                      </p>
+                    )}
+                    <p className="text-base font-black text-rose-900 mt-2 bg-white/60 py-1.5 rounded-xl border border-rose-100 max-w-sm mx-auto">
+                      Plan: {delCustomer.packageName} • Balance:{" "}
+                      {formatRupees(delCustomer.balanceDue)}
+                    </p>
                   </div>
-                  <label className="flex items-start gap-3 cursor-pointer bg-amber-50 border border-amber-300 rounded-xl p-4 select-none">
-                    <input type="checkbox" checked={delConfirm} onChange={(e) => setDelConfirm(e.target.checked)} className="w-7 h-7 mt-0.5 accent-rose-700 shrink-0 border-2 border-slate-400 rounded-lg" />
+
+                  <label className="flex items-start gap-4 cursor-pointer bg-amber-50 border-2 border-amber-300 rounded-2xl p-5 select-none hover:bg-amber-100/50 transition-all">
+                    <input
+                      type="checkbox"
+                      checked={delConfirm}
+                      onChange={(e) => setDelConfirm(e.target.checked)}
+                      className="w-8 h-8 mt-0.5 accent-rose-800 shrink-0 border-2 border-slate-400 rounded-xl"
+                    />
                     <span className="text-sm font-black text-amber-950 leading-snug">
-                      Confirm permanent termination. All transaction ledger row history attached to {delCustomer.customerId} will be dropped.
+                      ⚠️ Yes, I want to completely delete this profile. This
+                      will instantly wipe their outstanding tabs and log sheets
+                      out forever.
                     </span>
                   </label>
-                  {delResult && (
-                    <div className={`rounded-xl px-4 py-3 font-bold text-sm border-2 ${delResult.success ? "bg-emerald-50 text-emerald-900 border-emerald-300" : "bg-rose-50 text-rose-900 border-rose-300"}`}>
-                      {delResult.success ? "✅ SUCCESS: " : "❌ ERROR: "}{delResult.message}
-                    </div>
-                  )}
-                  <button onClick={handleDeleteCustomer} disabled={deleting || !delConfirm}
-                    className="w-full bg-rose-700 hover:bg-rose-800 disabled:bg-slate-100 disabled:text-slate-400 text-white text-base font-black py-4 rounded-xl shadow-md uppercase tracking-wider transition-colors touch-manipulation">
-                    {deleting ? "Dropping..." : "🗑️ Confirm Irreversible Deletion"}
+
+                  <button
+                    onClick={handleDeleteCustomer}
+                    disabled={deleting || !delConfirm}
+                    className="w-full bg-rose-700 hover:bg-rose-800 disabled:bg-slate-100 disabled:text-slate-400 text-white text-lg font-black py-5 rounded-2xl shadow-md uppercase tracking-wider transition-all"
+                  >
+                    {deleting
+                      ? "Dropping account records..."
+                      : "Confirm Permanent Delete"}
                   </button>
                 </div>
               )}
@@ -723,67 +1145,320 @@ export default function AdminPage() {
           </div>
 
           {/* ADD NEW CUSTOMER */}
-          <div className="bg-white rounded-2xl border border-slate-200/80 shadow-md overflow-hidden">
-            <ToolHeader color="bg-emerald-700" title="➕ Add Individual Profile" subtitle="Register a new hardware pipeline user" />
-            <div className="p-4 space-y-4">
+          <div className="bg-white rounded-3xl border-2 border-slate-200 shadow-sm overflow-hidden">
+            <ToolHeader
+              title="Register New Customer"
+              subtitle="Add a new Customer Profile with a unique ID and package plan"
+            />
+            <div className="p-5 space-y-4">
               <div>
-                <label className="block text-xs font-black text-slate-600 uppercase tracking-wider mb-1.5">Assigned Customer ID <span className="text-rose-500">*</span></label>
-                <input type="text" value={newCust.customerId} onChange={(e) => setNewCust({ ...newCust, customerId: e.target.value.toUpperCase() })} placeholder="E.G. C001" className={inputCls + " uppercase tracking-wider"} />
+                <label className="block text-xs font-black text-slate-600 uppercase tracking-wider mb-2">
+                  New Customer ID{" "}
+                  <span className="text-rose-500 font-black">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={newCust.customerId}
+                  onChange={(e) =>
+                    setNewCust({
+                      ...newCust,
+                      customerId: e.target.value.toUpperCase(),
+                    })
+                  }
+                  placeholder="e.g. S-06"
+                  className={inputCls + " uppercase tracking-wider"}
+                />
               </div>
               <div>
-                <label className="block text-xs font-black text-slate-600 uppercase tracking-wider mb-1.5">Subscriber Full Name <span className="text-rose-500">*</span></label>
-                <input type="text" value={newCust.name} onChange={(e) => setNewCust({ ...newCust, name: e.target.value })} placeholder="E.G. Ramesh Kumar" className={inputCls} />
+                <label className="block text-xs font-black text-slate-600 uppercase tracking-wider mb-2">
+                  Customer Full Name{" "}
+                  <span className="text-rose-500 font-black">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={newCust.name}
+                  onChange={(e) =>
+                    setNewCust({ ...newCust, name: e.target.value })
+                  }
+                  placeholder="e.g. Mithu Das"
+                  className={inputCls}
+                />
               </div>
               <div>
-                <label className="block text-xs font-black text-slate-600 uppercase tracking-wider mb-1.5">Assigned Service Pack <span className="text-rose-500">*</span></label>
-                <select value={newCust.packageId} onChange={(e) => setNewCust({ ...newCust, packageId: e.target.value })} className={inputCls}>
+                <label className="block text-xs font-black text-slate-600 uppercase tracking-wider mb-2">
+                  Select Base Package Plan{" "}
+                  <span className="text-rose-500 font-black">*</span>
+                </label>
+                <select
+                  value={newCust.packageId}
+                  onChange={(e) =>
+                    setNewCust({
+                      ...newCust,
+                      packageId: e.target.value,
+                      customPrice: "",
+                    })
+                  }
+                  className={inputCls + " h-[60px] text-base font-black"}
+                >
                   <option value="">— Select Plan Option —</option>
-                  {packages.map((pkg) => <option key={pkg.id} value={pkg.id}>{pkg.name} — ₹{pkg.price} / {pkg.durationDays} Days</option>)}
+                  {packages.map((pkg) => (
+                    <option key={pkg.id} value={pkg.id}>
+                      {pkg.name} — ₹{pkg.price} / {pkg.durationDays} Days
+                    </option>
+                  ))}
                 </select>
               </div>
-              <div>
-                <label className="block text-xs font-black text-slate-600 uppercase tracking-wider mb-1.5">Installation Address</label>
-                <input type="text" value={newCust.address} onChange={(e) => setNewCust({ ...newCust, address: e.target.value })} placeholder="e.g. Sector-4, House 12" className={inputCls} />
-              </div>
-              <div>
-                <label className="block text-xs font-black text-slate-600 uppercase tracking-wider mb-1.5">Cycle Activation Date (Leave empty for today)</label>
-                <input type="date" value={newCust.cycleStartDate} onChange={(e) => setNewCust({ ...newCust, cycleStartDate: e.target.value })} className={inputCls} />
-              </div>
-              {addCustResult && (
-                <div className={`rounded-xl px-4 py-3 font-bold text-sm border-2 ${addCustResult.success ? "bg-emerald-50 text-emerald-900 border-emerald-300" : "bg-rose-50 text-rose-900 border-rose-300"}`}>
-                  {addCustResult.success ? "✅ SUCCESS: " : "❌ ERROR: "}{addCustResult.message}
+
+              {/* DYNAMIC FIELD: Displayed only if package "OTHER" is active */}
+              {showCustomPriceField && (
+                <div>
+                  <label className="block text-xs font-black text-indigo-700 uppercase tracking-wider mb-2">
+                    Custom Base Price (₹) for "OTHER" Pack{" "}
+                    <span className="text-rose-500 font-black">*</span>
+                  </label>
+                  <input
+                    type="number"
+                    value={newCust.customPrice}
+                    onChange={(e) =>
+                      setNewCust({ ...newCust, customPrice: e.target.value })
+                    }
+                    placeholder="Enter custom absolute rate..."
+                    className={inputCls + " border-indigo-400 bg-indigo-50/30"}
+                    inputMode="decimal"
+                  />
                 </div>
               )}
-              <button onClick={handleAddCustomer} disabled={addingCust}
-                className="w-full bg-emerald-700 hover:bg-emerald-800 disabled:bg-slate-100 disabled:text-slate-400 text-white text-base font-black py-4 rounded-xl shadow-md uppercase tracking-wider transition-colors touch-manipulation">
-                {addingCust ? "Creating profile..." : "➕ Initialize Profile"}
+
+              <div>
+                <label className="block text-xs font-black text-slate-600 uppercase tracking-wider mb-2">
+                  Home Address
+                </label>
+                <input
+                  type="text"
+                  value={newCust.address}
+                  onChange={(e) =>
+                    setNewCust({ ...newCust, address: e.target.value })
+                  }
+                  placeholder="e.g. Ph. No. | Krishnapur Chak "
+                  className={inputCls}
+                />
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-black text-slate-600 uppercase tracking-wider mb-2">
+                    Change Start Date (Optional)
+                  </label>
+                  <input
+                    type="date"
+                    value={newCust.cycleStartDate}
+                    onChange={(e) =>
+                      setNewCust({ ...newCust, cycleStartDate: e.target.value })
+                    }
+                    className={inputCls}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-black text-indigo-700 uppercase tracking-wider mb-2">
+                    Change Expiry Date (Optional)
+                  </label>
+                  <input
+                    type="date"
+                    value={newCust.customExpiryDate}
+                    onChange={(e) =>
+                      setNewCust({
+                        ...newCust,
+                        customExpiryDate: e.target.value,
+                      })
+                    }
+                    className={inputCls + " border-indigo-300"}
+                  />
+                </div>
+              </div>
+              {addCustResult && (
+                <div
+                  className={`rounded-2xl px-4 py-4 font-black text-center text-base border-2 shadow-sm ${addCustResult.success ? "bg-emerald-50 text-emerald-900 border-emerald-400" : "bg-rose-50 text-rose-900 border-rose-400"}`}
+                >
+                  {addCustResult.message}
+                </div>
+              )}
+              <button
+                onClick={handleAddCustomer}
+                disabled={addingCust}
+                className="w-full bg-slate-900 hover:bg-slate-800 disabled:bg-slate-100 disabled:text-slate-400 text-white text-base font-black py-4.5 rounded-2xl shadow-md uppercase tracking-wider transition-all"
+              >
+                {addingCust
+                  ? "Deploying User..."
+                  : "Create New Customer Profile"}
+              </button>
+            </div>
+          </div>
+
+          {/* LOG MISSED / BACKDATED PAYMENT */}
+          <div className="bg-white rounded-3xl border-2 border-slate-200 shadow-sm overflow-hidden">
+            <ToolHeader
+              title="Add Record Missed / Backdated Payment"
+              subtitle="Add a payment into past logs for a customer who forgot to pay or was missed"
+              bgColor="bg-amber-700"
+            />
+            <div className="p-5 space-y-4">
+              <div>
+                <label className="block text-xs font-black text-slate-600 uppercase tracking-wider mb-2">
+                  Customer ID
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={missedCustomerId}
+                    onChange={(e) => {
+                      setMissedCustomerId(e.target.value.toUpperCase());
+                      setMissedLookupError("");
+                      setMissedSubmitResult(null);
+                      setMissedFoundCustomer(null);
+                    }}
+                    onKeyDown={(e) => e.key === "Enter" && handleMissedLookup()}
+                    placeholder="E.G. S-06"
+                    className={inputCls + " uppercase tracking-wider flex-1"}
+                  />
+                  <button
+                    onClick={handleMissedLookup}
+                    disabled={missedLookingUp || !missedCustomerId.trim()}
+                    className="bg-amber-700 hover:bg-amber-600 disabled:bg-slate-200 disabled:text-slate-400 text-white font-black px-6 rounded-2xl text-sm uppercase transition-all shrink-0 min-w-[90px]"
+                  >
+                    {missedLookingUp ? "..." : "LOAD"}
+                  </button>
+                </div>
+              </div>
+
+              {missedLookupError && (
+                <p className="text-rose-700 font-black text-sm bg-rose-50 border-2 border-rose-200 px-4 py-3 rounded-2xl">
+                  {missedLookupError}
+                </p>
+              )}
+
+              {missedFoundCustomer && (
+                <div className="bg-amber-50 border-2 border-amber-200 rounded-2xl p-4 space-y-3">
+                  <p className="font-black text-slate-900 text-lg leading-tight">
+                    Selected: {missedFoundCustomer.name} (
+                    <span className="font-mono font-black text-sm">
+                      {missedFoundCustomer.customerId}
+                    </span>
+                    )
+                  </p>
+                  <p className="text-xs font-bold text-slate-600">
+                    Plan Type: {missedFoundCustomer.packageName} • Current
+                    Pending Due:{" "}
+                    <span className="text-rose-600 font-black">
+                      {formatRupees(missedFoundCustomer.balanceDue)}
+                    </span>
+                  </p>
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-black text-slate-600 uppercase tracking-wider mb-2">
+                    Amount Received (₹)
+                  </label>
+                  <input
+                    type="number"
+                    value={missedAmount}
+                    onChange={(e) => setMissedAmount(e.target.value)}
+                    placeholder="0.00"
+                    className={inputCls}
+                    inputMode="decimal"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-black text-indigo-700 uppercase tracking-wider mb-2">
+                    Date of Payment{" "}
+                    <span className="text-rose-500 font-black">*</span>
+                  </label>
+                  <input
+                    type="date"
+                    value={missedDate}
+                    onChange={(e) => setMissedDate(e.target.value)}
+                    className={inputCls + " border-indigo-300"}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-black text-slate-600 uppercase tracking-wider mb-2">
+                  Notes
+                </label>
+                <input
+                  type="text"
+                  value={missedNote}
+                  onChange={(e) => setMissedNote(e.target.value)}
+                  placeholder="e.g. Forgot to write down last Tuesday"
+                  className={inputCls}
+                />
+              </div>
+
+              {missedSubmitResult && (
+                <div
+                  className={`rounded-2xl px-4 py-4 font-black border-2 text-center text-sm shadow-sm ${missedSubmitResult.success ? "bg-emerald-50 text-emerald-900 border-emerald-400" : "bg-rose-50 text-rose-900 border-rose-400"}`}
+                >
+                  {missedSubmitResult.message}
+                </div>
+              )}
+
+              <button
+                onClick={handleSaveMissedPayment}
+                disabled={
+                  missedSubmitting || !missedFoundCustomer || !missedDate
+                }
+                className="w-full bg-amber-700 hover:bg-amber-600 disabled:bg-slate-100 disabled:text-slate-400 text-white text-base font-black py-4.5 rounded-2xl shadow-md uppercase tracking-wider transition-all"
+              >
+                {missedSubmitting ? "Saving data..." : "Save Missed Record "}
               </button>
             </div>
           </div>
 
           {/* SERVICE PLANS */}
-          <div className="bg-white rounded-2xl border border-slate-200/80 shadow-md overflow-hidden">
-            <ToolHeader color="bg-slate-900" title="📦 Subscription Configuration" subtitle="Create or delete service cycle parameters" />
-            <div className="p-4 space-y-4">
+          <div className="bg-white rounded-3xl border-2 border-slate-200 shadow-sm overflow-hidden">
+            <ToolHeader
+              title="Add Package Plans"
+              subtitle="Add and view active subscription plans"
+            />
+            <div className="p-5 space-y-5">
               {packages.length > 0 && (
                 <div className="space-y-2">
-                  <label className="block text-xs font-black text-slate-500 tracking-wider uppercase">Active Active Packages</label>
+                  <label className="block text-xs font-black text-slate-500 tracking-wider uppercase">
+                    Active Plans
+                  </label>
                   {pkgDeleteResult && (
-                    <div className={`rounded-xl px-3 py-2 text-sm font-bold border-2 ${pkgDeleteResult.success ? "bg-emerald-50 text-emerald-900 border-emerald-300" : "bg-rose-50 text-rose-900 border-rose-300"}`}>
-                      {pkgDeleteResult.success ? "✅ " : "❌ "}{pkgDeleteResult.message}
+                    <div
+                      className={`rounded-2xl px-3 py-2.5 text-sm font-black border-2 text-center ${pkgDeleteResult.success ? "bg-emerald-50 text-emerald-900 border-emerald-300" : "bg-rose-50 text-rose-900 border-rose-300"}`}
+                    >
+                      {pkgDeleteResult.message}
                     </div>
                   )}
-                  <div className="space-y-2 max-h-72 overflow-y-auto border border-slate-200 rounded-xl p-2 bg-slate-50/40">
+                  <div className="space-y-2 max-h-72 overflow-y-auto border-2 border-slate-200 rounded-2xl p-2 bg-slate-50">
                     {packages.map((pkg) => (
-                      <div key={pkg.id} className="flex justify-between items-center bg-white border border-slate-200 rounded-xl px-4 py-3 shadow-sm gap-4">
+                      <div
+                        key={pkg.id}
+                        className="flex justify-between items-center bg-white border-2 border-slate-200/80 rounded-xl px-4 py-3 shadow-sm gap-4"
+                      >
                         <div className="min-w-0 flex-1">
-                          <p className="font-black text-slate-900 text-base truncate">{pkg.name}</p>
-                          <p className="text-xs font-bold text-slate-500 mt-0.5">Cycle: {pkg.durationDays} Days</p>
+                          <p className="font-black text-slate-900 text-base truncate">
+                            {pkg.name}
+                          </p>
+                          <p className="text-xs font-bold text-slate-500 mt-0.5">
+                            Cycle Span: {pkg.durationDays} Days
+                          </p>
                         </div>
                         <div className="flex items-center gap-3 shrink-0">
-                          <p className="font-black text-violet-700 text-base">{formatRupees(pkg.price)}</p>
-                          <button onClick={() => handleDeletePackage(pkg.id, pkg.name)} disabled={deletingPkgId === pkg.id}
-                            className="bg-rose-50 hover:bg-rose-100 text-rose-700 font-black text-sm p-2.5 rounded-xl border-2 border-rose-200 transition-colors">
+                          <p className="font-black text-indigo-600 text-base">
+                            {formatRupees(pkg.price)}
+                          </p>
+                          <button
+                            onClick={() =>
+                              handleDeletePackage(pkg.id, pkg.name)
+                            }
+                            disabled={deletingPkgId === pkg.id}
+                            className="bg-rose-50 hover:bg-rose-100 text-rose-700 font-black text-sm p-3 rounded-xl border-2 border-rose-200 transition-all active:scale-[0.94]"
+                          >
                             {deletingPkgId === pkg.id ? "..." : "🗑️"}
                           </button>
                         </div>
@@ -793,73 +1468,145 @@ export default function AdminPage() {
                 </div>
               )}
 
-              <div className="border-t border-slate-200 pt-4 space-y-3">
-                <p className="text-sm font-black text-slate-800 uppercase tracking-wide">➕ Configure Custom Pack</p>
-                <input type="text" value={newPkg.name} onChange={(e) => setNewPkg({ ...newPkg, name: e.target.value })} placeholder="Plan Designation (e.g. HD Pack)" className={inputCls} />
+              <div className="border-t-2 border-slate-100 pt-5 space-y-3">
+                <p className="text-sm font-black text-slate-800 uppercase tracking-wide">
+                  Add New Package
+                </p>
+                <input
+                  type="text"
+                  value={newPkg.name}
+                  onChange={(e) =>
+                    setNewPkg({ ...newPkg, name: e.target.value })
+                  }
+                  placeholder="Plan Name (e.g., HD Pack)"
+                  className={inputCls}
+                />
                 <div className="grid grid-cols-2 gap-2">
-                  <input type="number" value={newPkg.price} onChange={(e) => setNewPkg({ ...newPkg, price: e.target.value })} placeholder="Rate (₹)" className={inputCls} inputMode="decimal" />
-                  <input type="number" value={newPkg.durationDays} onChange={(e) => setNewPkg({ ...newPkg, durationDays: e.target.value })} placeholder="Span Days" className={inputCls} inputMode="numeric" />
+                  <input
+                    type="number"
+                    value={newPkg.price}
+                    onChange={(e) =>
+                      setNewPkg({ ...newPkg, price: e.target.value })
+                    }
+                    placeholder="Price (₹)"
+                    className={inputCls}
+                    inputMode="decimal"
+                  />
+                  <input
+                    type="number"
+                    value={newPkg.durationDays}
+                    onChange={(e) =>
+                      setNewPkg({ ...newPkg, durationDays: e.target.value })
+                    }
+                    placeholder="Days (e.g. 30)"
+                    className={inputCls}
+                    inputMode="numeric"
+                  />
                 </div>
                 {pkgResult && (
-                  <div className={`rounded-xl px-3 py-2.5 text-sm font-bold border-2 text-center ${pkgResult.success ? "bg-emerald-50 text-emerald-900 border-emerald-300" : "bg-rose-50 text-rose-900 border-rose-300"}`}>
-                    {pkgResult.success ? "✅ " : "❌ "}{pkgResult.message}
+                  <div
+                    className={`rounded-2xl px-3 py-3 text-sm font-black border-2 text-center ${pkgResult.success ? "bg-emerald-50 text-emerald-900 border-emerald-300" : "bg-rose-50 text-rose-900 border-rose-300"}`}
+                  >
+                    {pkgResult.message}
                   </div>
                 )}
-                <button onClick={handleCreatePackage} disabled={savingPkg}
-                  className="w-full bg-slate-900 hover:bg-slate-800 text-white text-sm font-black py-3.5 rounded-xl shadow-md uppercase tracking-wider transition-colors touch-manipulation">
-                  {savingPkg ? "Deploying..." : "+ Deploy Pack Setting"}
+                <button
+                  onClick={handleCreatePackage}
+                  disabled={savingPkg}
+                  className="w-full bg-slate-900 hover:bg-slate-800 text-white text-sm font-black py-4 rounded-2xl shadow-md uppercase tracking-wider transition-all"
+                >
+                  {savingPkg ? "Adding..." : "Add New Package"}
                 </button>
               </div>
             </div>
           </div>
 
           {/* BACKUP EXPORT */}
-          <div className="bg-white rounded-2xl border border-slate-200/80 shadow-md overflow-hidden">
-            <ToolHeader color="bg-teal-800" title="📥 Package Backup Extraction" subtitle="Compile full localized schema down to flat storage" />
-            <div className="p-4">
+          <div className="bg-white rounded-3xl border-2 border-slate-200 shadow-sm overflow-hidden">
+            <ToolHeader
+              title="Full Data Export"
+              subtitle="Extract records to offline storage backup"
+            />
+            <div className="p-5">
               <p className="text-slate-600 text-sm font-bold mb-4 leading-relaxed">
-                Compiles historical transactions, parameters, outstandings, and customer tags directly into local `.csv` sheet matrix format.
+                Compiles all customer balances, history, outstandings, and
+                system tags into a standardized `.csv` spreadsheet file.
               </p>
-              <button onClick={handleExport} disabled={exporting}
-                className="w-full bg-slate-900 hover:bg-slate-800 text-white text-base font-black py-4 rounded-xl shadow-md uppercase tracking-wider transition-colors touch-manipulation">
-                {exporting ? "Compiling storage matrix..." : "⬇️ Download Storage Ledger Backup"}
+              <button
+                onClick={handleExport}
+                disabled={exporting}
+                className="w-full bg-slate-900 hover:bg-slate-800 text-white text-base font-black py-4.5 rounded-2xl shadow-md uppercase tracking-wider transition-all"
+              >
+                {exporting
+                  ? "Compiling Backup Tables..."
+                  : "Download CSV Backup"}
               </button>
             </div>
           </div>
 
           {/* DATA IMPORT */}
-          <div className="bg-white rounded-2xl border border-slate-200/80 shadow-md overflow-hidden">
-            <ToolHeader color="bg-sky-700" title="📤 Batch Data Insertion" subtitle="Inject unified sheet arrays straight into live tables" />
-            <div className="p-4 space-y-4">
-              <div className="bg-sky-50 border-2 border-sky-200 rounded-xl p-4 text-sm text-sky-950 font-bold">
-                <p className="font-black text-sky-900 mb-1 uppercase tracking-wider text-xs">Required CSV Fields:</p>
-                <div className="font-mono text-xs bg-white border border-sky-200 p-2.5 rounded-xl text-center font-black tracking-wide mt-1.5 select-all overflow-x-auto whitespace-nowrap">
+          <div className="bg-white rounded-3xl border-2 border-slate-200 shadow-sm overflow-hidden">
+            <ToolHeader
+              title="Batch Data Import"
+              subtitle="Load all customer records directly into system"
+            />
+            <div className="p-5 space-y-4">
+              <div className="bg-sky-50 border-2 border-sky-200 rounded-2xl p-4 text-sm text-sky-950 font-bold">
+                <p className="font-black text-sky-900 mb-1 uppercase tracking-wider text-xs">
+                  Required Sheet Headers:
+                </p>
+                <div className="font-mono text-xs bg-white border border-sky-200 p-3 rounded-xl text-center font-black tracking-wide mt-1.5 select-all overflow-x-auto whitespace-nowrap">
                   customerid, name, package, address, startdate
                 </div>
               </div>
-              <div className="bg-slate-50 border-2 border-dashed border-slate-300 p-4 rounded-xl flex items-center justify-center">
-                <input type="file" accept=".csv,.xlsx,.xls" onChange={(e) => setImportFile(e.target.files[0] ?? null)}
-                  className="w-full text-sm text-slate-500 file:mr-3 file:py-2.5 file:px-4 file:rounded-xl file:border-0 file:bg-slate-950 file:text-white file:font-black file:text-xs hover:file:bg-slate-800 cursor-pointer" />
+              <div className="bg-slate-50 border-2 border-dashed border-slate-300 p-5 rounded-2xl flex items-center justify-center">
+                <input
+                  type="file"
+                  accept=".csv"
+                  onChange={(e) => setImportFile(e.target.files[0] ?? null)}
+                  className="w-full text-sm text-slate-500 file:mr-3 file:py-3 file:px-5 file:rounded-xl file:border-0 file:bg-slate-950 file:text-white file:font-black file:text-xs hover:file:bg-slate-800 cursor-pointer"
+                />
               </div>
-              <button onClick={handleImport} disabled={importing || !importFile}
-                className="w-full bg-sky-700 hover:bg-sky-800 text-white text-sm font-black py-3.5 rounded-xl shadow-md uppercase tracking-wider transition-colors touch-manipulation">
-                {importing ? "Processing array records..." : "📤 Process Bulk Database Injection"}
+              <button
+                onClick={handleImport}
+                disabled={importing || !importFile}
+                className="w-full bg-sky-700 hover:bg-sky-800 text-white text-sm font-black py-4 rounded-2xl shadow-md uppercase tracking-wider transition-all"
+              >
+                {importing ? "Processing..." : "Import Database Records"}
               </button>
               {importResult && (
-                <div className={`rounded-xl p-4 text-sm font-bold border-2 ${importResult.success ? "bg-emerald-50 border-emerald-200 text-emerald-900" : "bg-rose-50 border-rose-200 text-rose-800"}`}>
-                  <p className="text-base font-black">{importResult.message || importResult.error}</p>
+                <div
+                  className={`rounded-2xl p-4 text-sm font-bold border-2 ${importResult.success ? "bg-emerald-50 border-emerald-200 text-emerald-900" : "bg-rose-50 border-rose-200 text-rose-800"}`}
+                >
+                  <p className="text-base font-black">
+                    {importResult.message || importResult.error}
+                  </p>
                   {importResult.results && (
                     <div className="mt-3 space-y-1.5 text-sm">
-                      <p>🟢 Configured: <span className="font-black text-slate-900">{importResult.results.created.length}</span></p>
-                      <p>放置 Skipped: <span className="font-black text-slate-900">{importResult.results.skipped.length}</span></p>
-                      <p>🔴 Aborted: <span className="font-black text-rose-700">{importResult.results.failed.length}</span></p>
+                      <p>
+                        🟢 Configured:{" "}
+                        <span className="font-black text-slate-900">
+                          {importResult.results.created.length}
+                        </span>
+                      </p>
+                      <p>
+                        放置 Skipped:{" "}
+                        <span className="font-black text-slate-900">
+                          {importResult.results.skipped.length}
+                        </span>
+                      </p>
+                      <p>
+                        🔴 Aborted:{" "}
+                        <span className="font-black text-rose-700">
+                          {importResult.results.failed.length}
+                        </span>
+                      </p>
                     </div>
                   )}
                 </div>
               )}
             </div>
           </div>
-
         </div>
       )}
     </div>

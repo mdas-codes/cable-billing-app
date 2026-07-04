@@ -40,24 +40,24 @@ model Package {
 // selected Package's durationDays.
 // ============================================================
 model Customer {
-  id            String         @id @default(cuid())
-  customerId    String         @unique // human-facing short ID, shown first in UI
-  name          String
-  address       String?
-  status        CustomerStatus @default(ACTIVE)
+  id             String         @id @default(cuid())
+  customerId     String         @unique
+  name           String
+  address        String?
+  status         CustomerStatus @default(ACTIVE)
 
-  packageId     String
-  package       Package        @relation(fields: [packageId], references: [id])
+  packageId      String
+  package        Package        @relation(fields: [packageId], references: [id])
 
-  // Billing cycle tracking
-  cycleStartDate DateTime      @default(now())
-  expiryDate     DateTime      // current cycle end date / next due date
-  balanceDue     Decimal       @default(0) @db.Decimal(10, 2) // carry-forward unpaid amount
+  cycleStartDate DateTime       @default(now())
+  expiryDate     DateTime
+  balanceDue     Decimal        @default(0) @db.Decimal(10, 2)
 
-  payments      Payment[]
+  // CHANGED: added cascade deletion rule here
+  payments       Payment[]      @relation(onDelete: Cascade)
 
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
 
   @@index([expiryDate])
   @@index([status])
