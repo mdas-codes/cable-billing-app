@@ -16,16 +16,16 @@ datasource db {
 // days one billing cycle lasts (e.g. 28 days, 84 days, etc).
 // ============================================================
 model Package {
-  id          String   @id @default(cuid())
-  name        String   @unique
-  price       Decimal  @db.Decimal(10, 2)
+  id           String   @id @default(cuid())
+  name         String   @unique
+  price        Decimal  @db.Decimal(10, 2)
   durationDays Int
-  isActive    Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
-  customers   Customer[]
-  payments    Payment[]
+  customers    Customer[]
+  payments     Payment[]
 
   @@map("packages")
 }
@@ -53,8 +53,11 @@ model Customer {
   expiryDate     DateTime
   balanceDue     Decimal        @default(0) @db.Decimal(10, 2)
 
-  // CHANGED: added cascade deletion rule here
-  payments       Payment[]      @relation(onDelete: Cascade)
+  // Dynamic dynamic price modifier for variable package inputs (e.g. OTHER)
+  customPrice    Decimal?       @db.Decimal(10, 2)
+
+  // Payments array correctly referenced without attribute constraints
+  payments       Payment[]
 
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
@@ -79,23 +82,24 @@ enum CustomerStatus {
 // admin entries for accountability.
 // ============================================================
 model Payment {
-  id                    String        @id @default(cuid())
+  id                    String      @id @default(cuid())
 
   customerId            String
-  customer              Customer      @relation(fields: [customerId], references: [id])
+  // Cascade deletion constraint correctly moved to this foreign key mapping
+  customer              Customer    @relation(fields: [customerId], references: [id], onDelete: Cascade)
 
   packageId             String
-  package               Package       @relation(fields: [packageId], references: [id])
-  packagePriceSnapshot  Decimal       @db.Decimal(10, 2)
+  package               Package     @relation(fields: [packageId], references: [id])
+  packagePriceSnapshot  Decimal     @db.Decimal(10, 2)
 
-  amountPaid            Decimal       @db.Decimal(10, 2)
-  balanceAfterPayment   Decimal       @db.Decimal(10, 2) // customer.balanceDue at time of recording, post-payment
-  paymentType           PaymentType   @default(FULL)
-  recordedBy            RecordedBy    @default(COLLECTOR)
+  amountPaid            Decimal     @db.Decimal(10, 2)
+  balanceAfterPayment   Decimal     @db.Decimal(10, 2)
+  paymentType           PaymentType @default(FULL)
+  recordedBy            RecordedBy  @default(COLLECTOR)
   note                  String?
 
-  paidAt                DateTime      @default(now())
-  createdAt             DateTime      @default(now())
+  paidAt                DateTime    @default(now())
+  createdAt             DateTime    @default(now())
 
   @@index([paidAt])
   @@index([customerId])

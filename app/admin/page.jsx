@@ -1,4 +1,3 @@
-// app/admin/page.jsx
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
@@ -170,6 +169,7 @@ export default function AdminPage() {
   const [editExpiryDate, setEditExpiryDate] = useState("");
   const [editAddress, setEditAddress] = useState("");
   const [editBalanceDue, setEditBalanceDue] = useState("");
+  const [editCustomPrice, setEditCustomPrice] = useState("");
   const [editSaving, setEditSaving] = useState(false);
   const [editResult, setEditResult] = useState(null);
 
@@ -389,6 +389,7 @@ export default function AdminPage() {
         setEditExpiryDate(new Date(data.customer.expiryDate).toISOString().split("T")[0]);
         setEditAddress(data.customer.address || "");
         setEditBalanceDue(Number(data.customer.balanceDue).toString());
+        setEditCustomPrice(data.customer.customPrice ? Number(data.customer.customPrice).toString() : "");
       } else setEditSearchError("❌ Customer not found.");
     } catch { setEditSearchError("🌐 Network error."); }
     finally { setEditSearching(false); }
@@ -398,6 +399,9 @@ export default function AdminPage() {
     if (!editCustomer || !editPackageId) return;
     setEditSaving(true); setEditResult(null);
     try {
+      const selectedEditPkg = packages.find(p => p.id === editPackageId);
+      const isOtherEdit = selectedEditPkg?.name?.toUpperCase() === "OTHER";
+
       const res = await fetch("/api/customers", {
         method: "PUT",
         headers: { "Content-Type": "application/json", "x-admin-password": getPassword() },
@@ -406,7 +410,8 @@ export default function AdminPage() {
           packageId: editPackageId,
           customExpiryDate: editExpiryDate || undefined,
           address: editAddress,
-          manualBalanceAdjust: editBalanceDue !== "" ? Number(editBalanceDue) : undefined
+          manualBalanceAdjust: editBalanceDue !== "" ? Number(editBalanceDue) : undefined,
+          customPrice: isOtherEdit && editCustomPrice ? Number(editCustomPrice) : undefined
         }),
       });
       const data = await res.json();
@@ -457,8 +462,8 @@ export default function AdminPage() {
     }
     setAddingCust(true); setAddCustResult(null);
     try {
-      const selectedPkg = packages.find(p => p.id === newCust.packageId);
-      const isOther = selectedPkg?.name?.toUpperCase() === "OTHER";
+      const selectedNewPkg = packages.find(p => p.id === newCust.packageId);
+      const isOther = selectedNewPkg?.name?.toUpperCase() === "OTHER";
 
       const res = await fetch("/api/customers", {
         method: "POST",
@@ -551,6 +556,9 @@ export default function AdminPage() {
 
   const selectedNewPkg = packages.find(p => p.id === newCust.packageId);
   const showCustomPriceField = selectedNewPkg?.name?.toUpperCase() === "OTHER";
+
+  const selectedEditPkg = packages.find(p => p.id === editPackageId);
+  const showEditCustomPriceField = selectedEditPkg?.name?.toUpperCase() === "OTHER";
 
   if (!authed) {
     return (
@@ -974,7 +982,10 @@ export default function AdminPage() {
                     </label>
                     <select
                       value={editPackageId}
-                      onChange={(e) => setEditPackageId(e.target.value)}
+                      onChange={(e) => {
+                        setEditPackageId(e.target.value);
+                        setEditCustomPrice("");
+                      }}
                       className={inputCls + " h-[60px] text-base font-black"}
                     >
                       <option value="">— Select Plan Option —</option>
@@ -985,6 +996,24 @@ export default function AdminPage() {
                       ))}
                     </select>
                   </div>
+
+                  {/* DYNAMIC FIELD FOR MODIFY SECTION: Displayed only if package "OTHER" is active */}
+                  {showEditCustomPriceField && (
+                    <div>
+                      <label className="block text-xs font-black text-indigo-700 uppercase tracking-wider mb-2">
+                        Custom Base Price (₹) for "OTHER" Pack <span className="text-rose-500 font-black">*</span>
+                      </label>
+                      <input
+                        type="number"
+                        value={editCustomPrice}
+                        onChange={(e) => setEditCustomPrice(e.target.value)}
+                        placeholder="Enter custom absolute rate..."
+                        className={inputCls + " border-indigo-400 bg-indigo-50/30"}
+                        inputMode="decimal"
+                      />
+                    </div>
+                  )}
+
                   <div>
                     <label className="block text-xs font-black text-slate-600 uppercase tracking-wider mb-2">
                       Adjust Plan Expiry / Due Date

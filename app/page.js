@@ -107,7 +107,7 @@ export default function CollectorPage() {
       const data = await res.json();
       if (data.success && data.customer) {
         setFoundCustomer(data.customer);
-        setAmountPaid(Number(data.customer.balanceDue).toFixed(2));
+        setAmountPaid("");
       } else {
         setCustomerError("❌ Customer not found. Check ID again.");
       }
@@ -180,7 +180,7 @@ export default function CollectorPage() {
   const handleWalklistRowTap = (customer) => {
     setCustomerId(customer.customerId);
     setFoundCustomer(customer);
-    setAmountPaid(Number(customer.balanceDue).toFixed(2));
+    setAmountPaid("");
     setCustomerError("");
     setSubmitResult(null);
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -199,13 +199,27 @@ export default function CollectorPage() {
     );
   });
 
+  // ------------------------------------------------------------
+  // DYNAMIC MONETARY RECONCILIATION LAYER
+  // ------------------------------------------------------------
+  // Reads dynamic fields directly from the data profile schema model
+  const cardPkgPrice = foundCustomer
+    ? Number(foundCustomer.packagePrice ?? foundCustomer.customPrice ?? 0)
+    : 0;
+
+  const dbBalance = foundCustomer ? Number(foundCustomer.balanceDue || 0) : 0;
+
+  // Reconstruct exact parameters seamlessly
+  const isDbAlreadyCombined = cardPkgPrice > 0 && dbBalance > cardPkgPrice;
+  const cardPrevMonthDue = isDbAlreadyCombined ? (dbBalance - cardPkgPrice) : dbBalance;
+  const cardTotalCollectible = isDbAlreadyCombined ? dbBalance : (cardPkgPrice + dbBalance);
+
   return (
     <div className="space-y-6 pb-32 px-2 max-w-md mx-auto sm:px-4 pt-2">
       {/* ============================================================ */}
       {/* SECTION 1: PAYMENT FORM                                       */}
       {/* ============================================================ */}
       <section className="bg-white border-2 border-slate-200 rounded-3xl shadow-md overflow-hidden">
-        {/* Header Banner */}
         <div className="bg-slate-900 px-5 py-4">
           <h2 className="text-white text-base font-black tracking-wide uppercase leading-none">
             Payment Collection Form
@@ -274,15 +288,29 @@ export default function CollectorPage() {
                 </div>
                 <div className="text-right shrink-0">
                   <p className="text-[10px] text-slate-500 font-black tracking-wider uppercase">
-                    Balance Due
+                    Total Due
                   </p>
                   <p className="text-2xl font-black text-rose-600 leading-none mt-1">
-                    {formatRupees(foundCustomer.balanceDue)}
+                    {formatRupees(cardTotalCollectible)}
                   </p>
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-2 text-xs font-black text-slate-700 pt-2 border-t border-indigo-200/40">
+              {/* DYNAMIC VALUE RENDERING CONTAINER */}
+              <div className="bg-white rounded-xl border border-slate-200 p-2.5 space-y-1 text-xs font-black">
+                <div className="flex justify-between text-slate-600">
+                  <span>Current Month Price:</span>
+                  <span className="text-slate-900">{formatRupees(cardPkgPrice)}</span>
+                </div>
+                {cardPrevMonthDue > 0 && (
+                  <div className="flex justify-between text-rose-600 pt-1 border-t border-dashed border-slate-200">
+                    <span>Previous Month Due:</span>
+                    <span>+{formatRupees(cardPrevMonthDue)}</span>
+                  </div>
+                )}
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 text-xs font-black text-slate-700 pt-1">
                 <div className="bg-white px-2.5 py-2 rounded-xl border border-slate-200 shadow-sm flex items-center gap-1.5 min-w-0">
                   <span>📦</span>{" "}
                   <span className="truncate">
@@ -436,6 +464,12 @@ export default function CollectorPage() {
                   new Date().getDate(),
                 );
 
+              // Pull the saved model data cleanly without overrides
+              const pkgPrice = Number(customer.packagePrice ?? customer.customPrice ?? 0);
+              const totalDue = Number(customer.balanceDue || 0);
+              const listIsCombined = pkgPrice > 0 && totalDue > pkgPrice;
+              const listPrevDue = listIsCombined ? (totalDue - pkgPrice) : totalDue;
+
               return (
                 <button
                   key={customer.id}
@@ -450,7 +484,6 @@ export default function CollectorPage() {
                   {/* Left Side Info Area */}
                   <div className="min-w-0 flex-1 space-y-1.5">
                     <div className="flex items-center gap-2">
-                      {/* Enlarged, highly visible Customer ID tag */}
                       <span className="font-mono font-black text-sm text-slate-800 bg-slate-100 px-2.5 py-1 border border-slate-300 rounded-lg shrink-0 shadow-sm">
                         {customer.customerId}
                       </span>
@@ -468,13 +501,18 @@ export default function CollectorPage() {
                   </div>
 
                   {/* Right Side Balance Pricing Area */}
-                  <div className="text-right shrink-0 ml-1">
+                  <div className="text-right shrink-0 ml-1 flex flex-col justify-center">
                     <span
                       className={`font-black text-base tracking-tight block
-                      ${isOverdue ? "text-rose-600 text-lg" : "text-slate-700 text-base"}`}
+                      ${isOverdue ? "text-rose-600 text-lg" : "text-slate-700"}`}
                     >
-                      {formatRupees(customer.balanceDue)}
+                      {formatRupees(pkgPrice)}
                     </span>
+                    {listPrevDue > 0 && (
+                      <span className="text-[10px] font-black text-rose-600 bg-rose-50 border border-rose-100 px-1.5 py-0.5 rounded-md mt-0.5 inline-block">
+                        +{formatRupees(listPrevDue)} Due
+                      </span>
+                    )}
                   </div>
                 </button>
               );
