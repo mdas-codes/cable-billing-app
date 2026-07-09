@@ -304,14 +304,17 @@ export async function POST(request) {
     return serverErrorResponse("Failed to record payment.", err);
   }
 }
-// ADD THIS DELETE METHOD:
+// ---------------------------------------------------------------------
+// DELETE /api/payments
+// Admin only — requires x-admin-password header.
+// Removes payment log, restores previous balance, AND rolls back
+// billing cycle dates so they appear as pending/overdue on top immediately.
+// ---------------------------------------------------------------------
 export async function DELETE(request) {
   try {
     // 1. Password Verification
-    const adminPassword = request.headers.get("x-admin-password");
-    if (adminPassword !== process.env.ADMIN_PASSWORD) {
-      return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
-    }
+    const auth = verifyAdminPassword(request);
+    if (!auth.ok) return unauthorizedResponse(auth.error);
 
     // 2. Extract targeted payment ID
     const { searchParams } = new URL(request.url);
@@ -321,25 +324,51 @@ export async function DELETE(request) {
       return NextResponse.json({ success: false, error: "Missing log identifier ID" }, { status: 400 });
     }
 
-    // 3. Find the payment record first
+    // 3. Find the payment record first (including package details for duration rollbacks)
     const existingPayment = await prisma.payment.findUnique({
       where: { id: id },
+      include: { package: true }
     });
 
     if (!existingPayment) {
       return NextResponse.json({ success: false, error: "Payment record not found" }, { status: 404 });
     }
 
-    // 4. Safely execute reversal using updateMany to avoid strict unique constraints
+    // Prepare date updates conditionally
+    let customerDataUpdate = {
+      balanceDue: {
+        increment: Number(existingPayment.amountPaid),
+      },
+    };
+
+    // If it was a FULL payment, we must roll back the dates to force it back onto the walk-list
+    if (existingPayment.paymentType === "FULL" && existingPayment.package) {
+      // Find customer to read their current cycle dates
+      const currentCustomer = await prisma.customer.findUnique({
+        where: { id: existingPayment.customerId }
+      });
+
+      if (currentCustomer) {
+        const daysToRollback = existingPayment.package.durationDays || 30;
+
+        // Subtract the package days back off the renewed dates
+        const previousStart = new Date(currentCustomer.cycleStartDate);
+        previousStart.setDate(previousStart.getDate() - daysToRollback);
+
+        const previousExpiry = new Date(currentCustomer.expiryDate);
+        previousExpiry.setDate(previousExpiry.getDate() - daysToRollback);
+
+        customerDataUpdate.cycleStartDate = previousStart;
+        customerDataUpdate.expiryDate = previousExpiry;
+      }
+    }
+
+    // 4. Safely execute reversal in a transaction layer
     await prisma.$transaction([
-      // A) Safely revert balance tracking using updateMany
-      prisma.customer.updateMany({
-        where: { customerId: existingPayment.customerId },
-        data: {
-          balanceDue: {
-            increment: existingPayment.amountPaid,
-          },
-        },
+      // A) Update the specific customer profile balances and timelines
+      prisma.customer.update({
+        where: { id: existingPayment.customerId },
+        data: customerDataUpdate,
       }),
       // B) Delete the payment record
       prisma.payment.delete({
@@ -347,9 +376,8 @@ export async function DELETE(request) {
       }),
     ]);
 
-    return NextResponse.json({ success: true, message: "Payment tracking successfully reversed" });
+    return NextResponse.json({ success: true, message: "Payment reversed and historical billing timeline restored." });
   } catch (error) {
-    // We pass back the actual error message here so you can see exactly what failed in the network response
     console.error("Deletion Error:", error);
     return NextResponse.json({
       success: false,

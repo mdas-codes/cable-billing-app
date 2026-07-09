@@ -480,7 +480,7 @@ export default function CollectorPage() {
           <div className="divide-y divide-slate-200/60">
             {sortedFilteredDueList.map((customer) => {
               const isOverdue =
-                new Date(customer.expiryDate) <
+                new Date(customer.expiryDate) <=
                 new Date(
                   new Date().getFullYear(),
                   new Date().getMonth(),
