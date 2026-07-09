@@ -1,9 +1,3 @@
-// app/page.jsx
-// ---------------------------------------------------------------------
-// COLLECTOR PAGE — Home route (/)
-// Optimized for clear typography, huge mobile touch-targets, and responsive states.
-// ---------------------------------------------------------------------
-
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
@@ -55,14 +49,18 @@ export default function CollectorPage() {
     setWalklistError("");
     try {
       const res = await fetch("/api/customers?mode=walklist");
+      if (!res.ok) {
+        setWalklistError(`❌ Server Error: Received status code ${res.status}`);
+        return;
+      }
       const data = await res.json();
       if (data.success) {
         setWalklist(data.customers);
       } else {
         setWalklistError("Could not load today's list.");
       }
-    } catch {
-      setWalklistError("Network error loading walk-list.");
+    } catch (err) {
+      setWalklistError(`🌐 Connection/Parsing Error: ${err.message || "Network Dropout"}`);
     } finally {
       setWalklistLoading(false);
     }
@@ -75,6 +73,7 @@ export default function CollectorPage() {
       const res = await fetch("/api/admin/summary?mode=today", {
         headers: { "x-admin-password": adminPassword },
       });
+      if (!res.ok) return;
       const data = await res.json();
       if (data.success && data.paidCustomerIds) {
         setCheckedIds(new Set(data.paidCustomerIds));
@@ -104,6 +103,10 @@ export default function CollectorPage() {
       const res = await fetch(
         `/api/customers?customerId=${encodeURIComponent(customerId.trim().toUpperCase())}`,
       );
+      if (!res.ok) {
+        setCustomerError(`❌ Server Error: Received status code ${res.status}`);
+        return;
+      }
       const data = await res.json();
       if (data.success && data.customer) {
         setFoundCustomer(data.customer);
@@ -111,8 +114,8 @@ export default function CollectorPage() {
       } else {
         setCustomerError("❌ Customer not found. Check ID again.");
       }
-    } catch {
-      setCustomerError("🌐 Network error. Please try again.");
+    } catch (err) {
+      setCustomerError(`🌐 Error processing profile: ${err.message || "Network Dropout"}`);
     } finally {
       setLookingUp(false);
     }
@@ -151,12 +154,20 @@ export default function CollectorPage() {
         }),
       });
 
+      if (!res.ok) {
+        setSubmitResult({
+          success: false,
+          message: `❌ Post-Action Reject. Server code: ${res.status}`,
+        });
+        return;
+      }
+
       const data = await res.json();
 
       if (data.success) {
         setSubmitResult({
           success: true,
-          message: data.message || "Payment saved!",
+          message: data.message || "✓ Payment completely saved!",
         });
         setCheckedIds((prev) => new Set([...prev, foundCustomer.id]));
         setCustomerId("");
@@ -171,7 +182,7 @@ export default function CollectorPage() {
         });
       }
     } catch {
-      setSubmitResult({ success: false, message: "Network error. Try again." });
+      setSubmitResult({ success: false, message: "Network structural failure." });
     } finally {
       setSubmitting(false);
     }
@@ -200,16 +211,28 @@ export default function CollectorPage() {
   });
 
   // ------------------------------------------------------------
+  // DYNAMIC OVERDUE SORTING LOGIC
+  // ------------------------------------------------------------
+  // Sorts the list so all red/overdue profiles bubble to the absolute top
+  const sortedFilteredDueList = [...filteredDueList].sort((a, b) => {
+    const today = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate());
+    const isAOverdue = new Date(a.expiryDate) < today;
+    const isBOverdue = new Date(b.expiryDate) < today;
+
+    if (isAOverdue && !isBOverdue) return -1; // a comes first
+    if (!isAOverdue && isBOverdue) return 1;  // b comes first
+    return 0;                                 // remain unchanged
+  });
+
+  // ------------------------------------------------------------
   // DYNAMIC MONETARY RECONCILIATION LAYER
   // ------------------------------------------------------------
-  // Reads dynamic fields directly from the data profile schema model
   const cardPkgPrice = foundCustomer
     ? Number(foundCustomer.packagePrice ?? foundCustomer.customPrice ?? 0)
     : 0;
 
   const dbBalance = foundCustomer ? Number(foundCustomer.balanceDue || 0) : 0;
 
-  // Reconstruct exact parameters seamlessly
   const isDbAlreadyCombined = cardPkgPrice > 0 && dbBalance > cardPkgPrice;
   const cardPrevMonthDue = isDbAlreadyCombined ? (dbBalance - cardPkgPrice) : dbBalance;
   const cardTotalCollectible = isDbAlreadyCombined ? dbBalance : (cardPkgPrice + dbBalance);
@@ -224,7 +247,7 @@ export default function CollectorPage() {
           <h2 className="text-white text-base font-black tracking-wide uppercase leading-none">
             Payment Collection Form
           </h2>
-          <p className="text-white/70 text-[11px] font-bold mt-1.5 uppercase tracking-wider">
+          <p className="text-white/77 text-[11px] font-bold mt-1.5 uppercase tracking-wider">
             Write collection payment details below and save payment to update
             the walk-list.
           </p>
@@ -248,7 +271,7 @@ export default function CollectorPage() {
                   setSubmitResult(null);
                 }}
                 onKeyDown={handleCustomerIdKeyDown}
-                placeholder="E.G. C001"
+                placeholder="E.G. s-06"
                 className="w-full border-2 border-slate-300 rounded-2xl px-4 py-4
                            text-lg font-black uppercase tracking-wider text-slate-800
                            focus:outline-none focus:border-indigo-600 bg-slate-50/80
@@ -268,7 +291,7 @@ export default function CollectorPage() {
               </button>
             </div>
             {customerError && (
-              <p className="text-rose-770 font-black text-xs bg-rose-50 border border-rose-200 rounded-xl px-3 py-2 mt-2">
+              <p className="text-rose-700 font-black text-xs bg-rose-50 border border-rose-200 rounded-xl px-3 py-2 mt-2">
                 {customerError}
               </p>
             )}
@@ -455,7 +478,7 @@ export default function CollectorPage() {
 
         {!walklistLoading && dueTodayList.length > 0 && (
           <div className="divide-y divide-slate-200/60">
-            {filteredDueList.map((customer) => {
+            {sortedFilteredDueList.map((customer) => {
               const isOverdue =
                 new Date(customer.expiryDate) <
                 new Date(
