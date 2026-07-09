@@ -72,8 +72,10 @@ function PaymentRow({ payment, onDelete, isDeleting }) {
         <div className="text-left sm:text-right shrink-0 bg-slate-50 sm:bg-transparent p-2.5 sm:p-0 rounded-xl border border-slate-200 sm:border-0 flex sm:flex-col items-center sm:items-end justify-between sm:justify-start gap-2 sm:gap-0 mt-1 sm:mt-0 w-full sm:w-auto">
           <div>
             <p className="text-xl font-black text-emerald-700">{formatRupees(payment.amountPaid)}</p>
-            {Number(payment.balanceAfterPayment) > 0 && (
-              <p className="text-xs text-rose-600 font-black mt-0.5">Bal: {formatRupees(payment.balanceAfterPayment)}</p>
+            {Number(payment.balanceAfterPayment) !== 0 && (
+              <p className={`text-xs font-black mt-0.5 ${Number(payment.balanceAfterPayment) < 0 ? "text-indigo-600" : "text-rose-600"}`}>
+                {Number(payment.balanceAfterPayment) < 0 ? "Credit: " : "Bal: "}{formatRupees(Math.abs(payment.balanceAfterPayment))}
+              </p>
             )}
           </div>
           {onDelete && (
@@ -275,7 +277,20 @@ export default function AdminPage() {
     try {
       const res = await fetch(`/api/customers?customerId=${encodeURIComponent(adminCustomerId.trim().toUpperCase())}`);
       const data = await res.json();
-      if (data.success && data.customer) { setAdminFoundCustomer(data.customer); setAdminAmountPaid(Number(data.customer.balanceDue).toFixed(2)); }
+      if (data.success && data.customer) {
+        setAdminFoundCustomer(data.customer);
+
+        const isOtherPkg = data.customer.package?.name?.toUpperCase() === "OTHER";
+        const packagePrice = isOtherPkg && data.customer.customPrice !== null
+          ? Number(data.customer.customPrice)
+          : Number(data.customer.package?.price || 0);
+
+        const liveBalance = Number(data.customer.balanceDue);
+        const isDbAlreadyCombined = packagePrice > 0 && liveBalance > packagePrice;
+        const totalCollectible = isDbAlreadyCombined ? liveBalance : (packagePrice + liveBalance);
+
+        setAdminAmountPaid(totalCollectible.toFixed(2));
+      }
       else setAdminCustomerError("❌ Customer not found.");
     } catch { setAdminCustomerError("🌐 Network error."); }
     finally { setAdminLookingUp(false); }
@@ -333,7 +348,17 @@ export default function AdminPage() {
       const data = await res.json();
       if (data.success && data.customer) {
         setMissedFoundCustomer(data.customer);
-        setMissedAmount(Number(data.customer.balanceDue).toFixed(2));
+
+        const isOtherPkg = data.customer.package?.name?.toUpperCase() === "OTHER";
+        const packagePrice = isOtherPkg && data.customer.customPrice !== null
+          ? Number(data.customer.customPrice)
+          : Number(data.customer.package?.price || 0);
+
+        const liveBalance = Number(data.customer.balanceDue);
+        const isDbAlreadyCombined = packagePrice > 0 && liveBalance > packagePrice;
+        const totalCollectible = isDbAlreadyCombined ? liveBalance : (packagePrice + liveBalance);
+
+        setMissedAmount(totalCollectible.toFixed(2));
       }
       else setMissedLookupError("❌ Customer not found.");
     } catch { setMissedLookupError("🌐 Network error."); }
@@ -355,14 +380,14 @@ export default function AdminPage() {
           amountPaid: Number(missedAmount),
           recordedBy: "ADMIN",
           note: missedNote.trim() ? `[Backdated] ${missedNote.trim()}` : "[Backdated missed entry]",
-          customDate: missedDate // Sent to API override block
+          customDate: missedDate
         }),
       });
       const data = await res.json();
       if (data.success) {
-        setMissedSubmitResult({ success: true, message: "✓ Backdated cash record injected successfully!" });
+        setMissedSubmitResult({ success: true, message: data.message || "✓ Backdated cash record injected successfully!" });
         setMissedCustomerId(""); setMissedFoundCustomer(null); setMissedAmount(""); setMissedDate(""); setMissedNote("");
-        setTodayData(null); setMonthlyData(null); // Clears state cache so lists pull freshly
+        setTodayData(null); setMonthlyData(null);
       } else {
         setMissedSubmitResult({ success: false, message: data.error });
       }
@@ -731,6 +756,14 @@ export default function AdminPage() {
                             {formatRupees(adminFoundCustomer.balanceDue)}
                           </span>
                         </span>
+                        <span>
+                          Plan Price:{" "}
+                          <span className="font-black text-indigo-600 text-sm">
+                            {adminFoundCustomer.package?.name?.toUpperCase() === "OTHER"
+                              ? formatRupees(adminFoundCustomer.customPrice || 0)
+                              : formatRupees(adminFoundCustomer.package?.price || 0)}
+                          </span>
+                        </span>
                       </div>
                     </div>
                   )}
@@ -997,7 +1030,6 @@ export default function AdminPage() {
                     </select>
                   </div>
 
-                  {/* DYNAMIC FIELD FOR MODIFY SECTION: Displayed only if package "OTHER" is active */}
                   {showEditCustomPriceField && (
                     <div>
                       <label className="block text-xs font-black text-indigo-700 uppercase tracking-wider mb-2">
@@ -1238,7 +1270,6 @@ export default function AdminPage() {
                 </select>
               </div>
 
-              {/* DYNAMIC FIELD: Displayed only if package "OTHER" is active */}
               {showCustomPriceField && (
                 <div>
                   <label className="block text-xs font-black text-indigo-700 uppercase tracking-wider mb-2">

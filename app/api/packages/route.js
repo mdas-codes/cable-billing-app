@@ -1,3 +1,9 @@
+// app/api/packages/route.js
+// ---------------------------------------------------------------------
+// Manages package subscription profiles with case-insensitive collision
+// guardrails and clean historical soft-deletion archiving.
+// ---------------------------------------------------------------------
+
 import prisma from "@/lib/prisma";
 import {
   verifyAdminPassword,
@@ -7,6 +13,9 @@ import {
   successResponse,
 } from "@/lib/auth";
 
+// ---------------------------------------------------------------------
+// GET: Fetch All Active System Packages
+// ---------------------------------------------------------------------
 export async function GET() {
   try {
     const packages = await prisma.package.findMany({
@@ -25,33 +34,50 @@ export async function GET() {
   }
 }
 
+// ---------------------------------------------------------------------
+// POST: Register New Package Template
+// ---------------------------------------------------------------------
 export async function POST(request) {
   const auth = verifyAdminPassword(request);
   if (!auth.ok) return unauthorizedResponse(auth.error);
 
   let body;
-  try { body = await request.json(); } catch { return badRequestResponse("Invalid JSON."); }
+  try {
+    body = await request.json();
+  } catch {
+    return badRequestResponse("Invalid JSON body payload mapping.");
+  }
 
   const { name, price, durationDays } = body;
 
-  if (!name) return badRequestResponse("Package designation name required.");
+  if (!name || name.trim().length === 0) {
+    return badRequestResponse("Package designation name required.");
+  }
 
   try {
+    const normalizedName = name.trim();
+
+    // Only block creation if an ACTIVE package already claims this exact string identifier
     const existing = await prisma.package.findFirst({
-      where: { name: { equals: name.trim(), mode: "insensitive" } },
+      where: {
+        name: { equals: normalizedName, mode: "insensitive" },
+        isActive: true
+      },
     });
-    if (existing) return badRequestResponse(`Package "${name}" already exists.`);
+    if (existing) return badRequestResponse(`An active package named "${normalizedName}" already exists.`);
 
     const newPackage = await prisma.package.create({
       data: {
-        name: name.trim(),
-        price: Number(price || 0), // Can be 0 for "OTHER" packages
+        name: normalizedName,
+        price: Number(price || 0),
         durationDays: Number(durationDays || 30),
         isActive: true,
       },
     });
 
-    return successResponse({ package: { ...newPackage, price: Number(newPackage.price) } });
+    return successResponse({
+      package: { ...newPackage, price: Number(newPackage.price) }
+    });
   } catch (err) {
     return serverErrorResponse("Failed to create package configuration profile.", err);
   }

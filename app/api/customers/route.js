@@ -1,5 +1,11 @@
+// app/api/customers/route.js
+// ---------------------------------------------------------------------
+// Handles high-performance operations for listing, creating, updating,
+// and deleting customer entities with complete relational accuracy.
+// ---------------------------------------------------------------------
+
 import prisma from "@/lib/prisma";
-import { Prisma } from "@prisma/client"; // 🟢 NEEDED FOR DECIMAL FIELDS
+import { Prisma } from "@prisma/client";
 import {
   verifyAdminPassword,
   unauthorizedResponse,
@@ -8,10 +14,24 @@ import {
   successResponse,
 } from "@/lib/auth";
 
+// Helper: safe date-boundary serializer removing trailing timezone offsets
+function normalizeLocalMidnight(inputString) {
+  if (!inputString) return new Date();
+  const d = new Date(inputString);
+  if (isNaN(d.getTime())) {
+    const today = new Date();
+    return new Date(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0, 0);
+  }
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
+}
+
 function serializeCustomer(c) {
   const hasCustomPrice = c.customPrice !== undefined && c.customPrice !== null;
-  const truePackagePrice = c.package?.name?.toUpperCase() === "OTHER" && hasCustomPrice
-    ? Number(c.customPrice)
+  const isOtherPkg = c.package?.name?.toUpperCase() === "OTHER";
+
+  // High-visibility structural fix: ensure truePackagePrice falls back to package price if customPrice isn't set yet
+  const truePackagePrice = isOtherPkg
+    ? (hasCustomPrice ? Number(c.customPrice) : Number(c.package?.price ?? 0))
     : (c.package ? Number(c.package.price) : 0);
 
   return {
@@ -25,15 +45,14 @@ function serializeCustomer(c) {
     packagePrice: truePackagePrice,
     cycleStartDate: c.cycleStartDate.toISOString(),
     expiryDate: c.expiryDate.toISOString(),
-    balanceDue: Number(c.balanceDue), // Safely returns numeric float to front-end
+    balanceDue: Number(c.balanceDue),
     createdAt: c.createdAt.toISOString(),
     updatedAt: c.updatedAt.toISOString(),
   };
 }
 
-
 // ---------------------------------------------------------------------
-// GET: Fetch Walklist (Shows all customers who owe money, past or present)
+// GET: Fetch Walklist, Individual Profiles, or Real-time Search Pools
 // ---------------------------------------------------------------------
 export async function GET(request) {
   const { searchParams } = new URL(request.url);
@@ -47,17 +66,18 @@ export async function GET(request) {
         where: { customerId: customerIdParam.trim().toUpperCase() },
         include: { package: true },
       });
-      if (!customer) return Response.json({ success: false, error: "Customer not found" }, { status: 404 });
+      if (!customer) return badRequestResponse("Customer profile not found on server record registries.");
       return successResponse({ customer: serializeCustomer(customer) });
     }
 
     if (search) {
+      const query = search.trim();
       const customers = await prisma.customer.findMany({
         where: {
           status: "ACTIVE",
           OR: [
-            { customerId: { contains: search.trim(), mode: "insensitive" } },
-            { name: { contains: search.trim(), mode: "insensitive" } },
+            { customerId: { contains: query, mode: "insensitive" } },
+            { name: { contains: query, mode: "insensitive" } },
           ],
         },
         include: { package: true },
@@ -67,13 +87,18 @@ export async function GET(request) {
       return successResponse({ customers: customers.map(serializeCustomer) });
     }
 
-    // 🟢 UPDATED WALKLIST LOGIC
     if (mode === "walklist") {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      // Outdoor field Optimization: Only return customers who actually owe money or have already expired
       const customers = await prisma.customer.findMany({
         where: {
           status: "ACTIVE",
-          // Pulls any active customer regardless of their current calendar day
-          // so your collectors can process payments for current active cycles too
+          OR: [
+            { balanceDue: { gt: 0 } },
+            { expiryDate: { lte: today } }
+          ]
         },
         include: { package: true },
         orderBy: [
@@ -112,48 +137,48 @@ export async function POST(request) {
   }
 
   try {
+    const formattedId = customerId.trim().toUpperCase();
     const existing = await prisma.customer.findUnique({
-      where: { customerId: customerId.trim().toUpperCase() },
+      where: { customerId: formattedId },
     });
-    if (existing) return badRequestResponse(`Customer ID "${customerId.toUpperCase()}" already exists.`);
+    if (existing) return badRequestResponse(`Customer ID "${formattedId}" already exists.`);
 
     const pkg = await prisma.package.findUnique({ where: { id: packageId } });
-    if (!pkg) return badRequestResponse("Selected package not found.");
+    if (!pkg) return badRequestResponse("Selected package template not found.");
 
-    const startDate = cycleStartDate ? new Date(cycleStartDate) : new Date();
+    const startDate = normalizeLocalMidnight(cycleStartDate);
 
-    let expiry = customExpiryDate ? new Date(customExpiryDate) : new Date(startDate);
-    if (!customExpiryDate) {
+    let expiry;
+    if (customExpiryDate) {
+      expiry = normalizeLocalMidnight(customExpiryDate);
+    } else {
+      expiry = new Date(startDate);
       expiry.setDate(expiry.getDate() + pkg.durationDays);
     }
 
     const isPkgOther = pkg.name.toUpperCase() === "OTHER";
-    const initialPrice = isPkgOther && customPrice !== undefined
+    const initialPrice = isPkgOther && customPrice !== undefined && customPrice !== null
       ? Number(customPrice)
       : Number(pkg.price);
 
-    let insertData = {
-      customerId: customerId.trim().toUpperCase(),
-      name: name.trim(),
-      address: address ? address.trim() : null,
-      packageId,
-      cycleStartDate: startDate,
-      expiryDate: expiry,
-      // 🟢 WRAPPED IN PRISMA.DECIMAL
-      balanceDue: new Prisma.Decimal(initialPrice),
-      status: "ACTIVE",
-      // 🟢 WRAPPED IN PRISMA.DECIMAL
-      customPrice: isPkgOther && customPrice !== undefined ? new Prisma.Decimal(customPrice) : null,
-    };
-
     const customer = await prisma.customer.create({
-      data: insertData,
+      data: {
+        customerId: formattedId,
+        name: name.trim(),
+        address: address ? address.trim() : null,
+        packageId,
+        cycleStartDate: startDate,
+        expiryDate: expiry,
+        balanceDue: new Prisma.Decimal(initialPrice),
+        status: "ACTIVE",
+        customPrice: isPkgOther && customPrice !== undefined && customPrice !== null ? new Prisma.Decimal(customPrice) : null,
+      },
       include: { package: true },
     });
 
     return successResponse({ customer: serializeCustomer(customer) });
   } catch (err) {
-    return serverErrorResponse("Failed to register customer.", err);
+    return serverErrorResponse("Failed to register customer entry.", err);
   }
 }
 
@@ -165,7 +190,7 @@ export async function PUT(request) {
   if (!auth.ok) return unauthorizedResponse(auth.error);
 
   let body;
-  try { body = await request.json(); } catch { return badRequestResponse("Invalid JSON."); }
+  try { body = await request.json(); } catch { return badRequestResponse("Invalid JSON formatting configuration."); }
 
   const { id, name, address, packageId, customExpiryDate, manualBalanceAdjust, customPrice, status } = body;
 
@@ -184,19 +209,17 @@ export async function PUT(request) {
       status: status || currentCustomer.status,
     };
 
-    // If changing packages or altering dynamic rates
     if (packageId) {
       const newPkg = await prisma.package.findUnique({ where: { id: packageId } });
       if (!newPkg) return badRequestResponse("New package target does not exist.");
 
       const isNewPkgOther = newPkg.name.toUpperCase() === "OTHER";
-      const targetPlanRate = isNewPkgOther && customPrice !== undefined
+      const targetPlanRate = isNewPkgOther && customPrice !== undefined && customPrice !== null
         ? Number(customPrice)
         : Number(newPkg.price);
 
       updatedData.packageId = packageId;
-      // 🟢 WRAPPED IN PRISMA.DECIMAL
-      updatedData.customPrice = isNewPkgOther && customPrice !== undefined ? new Prisma.Decimal(customPrice) : null;
+      updatedData.customPrice = isNewPkgOther && customPrice !== undefined && customPrice !== null ? new Prisma.Decimal(customPrice) : null;
 
       if (packageId !== currentCustomer.packageId) {
         const hasPrevCustom = currentCustomer.customPrice !== undefined && currentCustomer.customPrice !== null;
@@ -207,19 +230,19 @@ export async function PUT(request) {
         const previousDue = Number(currentCustomer.balanceDue) - previousPlanRate;
         const finalCalculatedDue = (previousDue < 0 ? 0 : previousDue) + targetPlanRate;
 
-        // 🟢 WRAPPED IN PRISMA.DECIMAL
         updatedData.balanceDue = new Prisma.Decimal(finalCalculatedDue);
 
         if (!customExpiryDate) {
           const now = new Date();
-          updatedData.cycleStartDate = now;
-          const nextExpiry = new Date(now);
+          const midStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+          updatedData.cycleStartDate = midStart;
+
+          const nextExpiry = new Date(midStart);
           nextExpiry.setDate(nextExpiry.getDate() + newPkg.durationDays);
           updatedData.expiryDate = nextExpiry;
         }
       } else {
-        // Same package structure adjustment override
-        if (isNewPkgOther && customPrice !== undefined) {
+        if (isNewPkgOther && customPrice !== undefined && customPrice !== null) {
           const hasCurrentCustom = currentCustomer.customPrice !== undefined && currentCustomer.customPrice !== null;
           const currentRateOnRecord = hasCurrentCustom
             ? Number(currentCustomer.customPrice)
@@ -228,18 +251,16 @@ export async function PUT(request) {
           const baselineDebt = Number(currentCustomer.balanceDue) - currentRateOnRecord;
           const finalCalculatedDue = (baselineDebt < 0 ? 0 : baselineDebt) + targetPlanRate;
 
-          // 🟢 WRAPPED IN PRISMA.DECIMAL
           updatedData.balanceDue = new Prisma.Decimal(finalCalculatedDue);
         }
       }
     }
 
     if (customExpiryDate) {
-      updatedData.expiryDate = new Date(customExpiryDate);
+      updatedData.expiryDate = normalizeLocalMidnight(customExpiryDate);
     }
 
-    if (manualBalanceAdjust !== undefined) {
-      // 🟢 WRAPPED IN PRISMA.DECIMAL
+    if (manualBalanceAdjust !== undefined && manualBalanceAdjust !== null) {
       updatedData.balanceDue = new Prisma.Decimal(manualBalanceAdjust);
     }
 
@@ -251,8 +272,8 @@ export async function PUT(request) {
 
     return successResponse({ customer: serializeCustomer(updatedCustomer), message: "Customer profile updated successfully." });
   } catch (err) {
-    console.error("PUT Error details:", err); // Safety console lookup
-    return serverErrorResponse("Failed updating customer context.", err);
+    console.error("[CUSTOMER_ROUTE_PUT_ERROR]:", err);
+    return serverErrorResponse("Failed updating customer context records.", err);
   }
 }
 
@@ -269,8 +290,13 @@ export async function DELETE(request) {
   if (!id) return badRequestResponse("Database ID param required for deletion execution.");
 
   try {
-    await prisma.customer.delete({ where: { id } });
-    return successResponse({ message: "Customer and all associated records permanently purged." });
+    // Atomic cascade deletion to prevent constraint crashes
+    await prisma.$transaction([
+      prisma.payment.deleteMany({ where: { customerId: id } }),
+      prisma.customer.delete({ where: { id } })
+    ]);
+
+    return successResponse({ message: "Customer and all associated transaction records permanently purged." });
   } catch (err) {
     return serverErrorResponse("Failed executing permanent clean deletion action.", err);
   }

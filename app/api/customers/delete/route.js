@@ -1,4 +1,9 @@
 // app/api/customers/delete/route.js
+// ---------------------------------------------------------------------
+// Handles hard-deleting a customer profile along with their historical
+// payment records atomically within a secure database transaction layer.
+// ---------------------------------------------------------------------
+
 import prisma from "@/lib/prisma";
 import {
   verifyAdminPassword,
@@ -13,7 +18,7 @@ export async function DELETE(request) {
   const auth = verifyAdminPassword(request);
   if (!auth.ok) return unauthorizedResponse(auth.error);
 
-  // 2. Extract customerId from JSON Body instead of URL
+  // 2. Extract customerId from JSON Body
   let body;
   try {
     body = await request.json();
@@ -36,26 +41,26 @@ export async function DELETE(request) {
     });
 
     if (!existing) {
-      return Response.json(
-        { success: false, error: `Customer "${formattedCustomerId}" not found.` },
-        { status: 404 }
-      );
+      return badRequestResponse(`Customer "${formattedCustomerId}" not found.`);
     }
 
-    // 4. Delete customer record
-    await prisma.customer.delete({
-      where: { customerId: formattedCustomerId },
-    });
+    // 4. Safely purge customer along with dependencies inside a transactional operation
+    await prisma.$transaction([
+      // A) Cascade clear all recorded payment rows linked to this internal profile ID
+      prisma.payment.deleteMany({
+        where: { customerId: existing.id },
+      }),
+      // B) Delete the parent customer record securely
+      prisma.customer.delete({
+        where: { id: existing.id },
+      }),
+    ]);
 
     return successResponse({
-      message: `Customer "${formattedCustomerId}" successfully deleted.`,
+      message: `Customer "${formattedCustomerId}" and all linked transaction history successfully removed.`,
     });
   } catch (err) {
-    if (err.code === "P2003") {
-      return badRequestResponse(
-        "Cannot delete customer because they have linked transaction history. Consider changing status to INACTIVE instead."
-      );
-    }
-    return serverErrorResponse("Failed to delete customer.", err);
+    console.error("[CUSTOMER_DELETE_ERROR]:", err);
+    return serverErrorResponse("Failed to complete customer deletion pipeline.", err);
   }
 }

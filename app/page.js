@@ -213,22 +213,22 @@ export default function CollectorPage() {
   // ------------------------------------------------------------
   // DYNAMIC OVERDUE SORTING LOGIC
   // ------------------------------------------------------------
-  // Sorts the list so all red/overdue profiles bubble to the absolute top
   const sortedFilteredDueList = [...filteredDueList].sort((a, b) => {
     const today = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate());
     const isAOverdue = new Date(a.expiryDate) < today;
     const isBOverdue = new Date(b.expiryDate) < today;
 
-    if (isAOverdue && !isBOverdue) return -1; // a comes first
-    if (!isAOverdue && isBOverdue) return 1;  // b comes first
-    return 0;                                 // remain unchanged
+    if (isAOverdue && !isBOverdue) return -1;
+    if (!isAOverdue && isBOverdue) return 1;
+    return 0;
   });
 
   // ------------------------------------------------------------
   // DYNAMIC MONETARY RECONCILIATION LAYER
   // ------------------------------------------------------------
+  const isOtherPkg = foundCustomer?.packageName?.toUpperCase() === "OTHER";
   const cardPkgPrice = foundCustomer
-    ? Number(foundCustomer.packagePrice ?? foundCustomer.customPrice ?? 0)
+    ? (isOtherPkg && foundCustomer.customPrice !== null ? Number(foundCustomer.customPrice) : Number(foundCustomer.packagePrice ?? 0))
     : 0;
 
   const dbBalance = foundCustomer ? Number(foundCustomer.balanceDue || 0) : 0;
@@ -247,7 +247,7 @@ export default function CollectorPage() {
           <h2 className="text-white text-base font-black tracking-wide uppercase leading-none">
             Payment Collection Form
           </h2>
-          <p className="text-white/77 text-[11px] font-bold mt-1.5 uppercase tracking-wider">
+          <p className="text-white/75 text-[11px] font-bold mt-1.5 uppercase tracking-wider">
             Write collection payment details below and save payment to update
             the walk-list.
           </p>
@@ -487,8 +487,11 @@ export default function CollectorPage() {
                   new Date().getDate(),
                 );
 
-              // Pull the saved model data cleanly without overrides
-              const pkgPrice = Number(customer.packagePrice ?? customer.customPrice ?? 0);
+              const isCustOtherPkg = customer.packageName?.toUpperCase() === "OTHER";
+              const pkgPrice = isCustOtherPkg && customer.customPrice !== null
+                ? Number(customer.customPrice)
+                : Number(customer.packagePrice ?? 0);
+
               const totalDue = Number(customer.balanceDue || 0);
               const listIsCombined = pkgPrice > 0 && totalDue > pkgPrice;
               const listPrevDue = listIsCombined ? (totalDue - pkgPrice) : totalDue;

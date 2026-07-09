@@ -1,8 +1,7 @@
 // app/api/customers/update/route.js
 // ---------------------------------------------------------------------
 // Handles Customer modifications.
-// PATCH /api/customers/update             — Admin only. Updates customer details,
-//                                           renews packages, or changes status.
+// PATCH /api/customers/update — Admin only. Updates details or fields cleanly.
 // ---------------------------------------------------------------------
 
 import prisma from "@/lib/prisma";
@@ -15,7 +14,7 @@ import {
 } from "@/lib/auth";
 
 export async function PATCH(request) {
-  // 1. Authenticate Request (Checks x-admin-password header)
+  // 1. Authenticate Request
   const auth = verifyAdminPassword(request);
   if (!auth.ok) return unauthorizedResponse(auth.error);
 
@@ -39,10 +38,7 @@ export async function PATCH(request) {
       include: { package: true },
     });
     if (!customer) {
-      return Response.json(
-        { success: false, error: `Customer "${formattedCustomerId}" not found.` },
-        { status: 404 }
-      );
+      return badRequestResponse(`Customer "${formattedCustomerId}" not found.`);
     }
 
     // 4. Build dynamic update data object
@@ -50,33 +46,40 @@ export async function PATCH(request) {
 
     if (name !== undefined) updateData.name = name.trim();
     if (address !== undefined) updateData.address = address ? address.trim() : null;
-    if (status !== undefined) updateData.status = status; // e.g., 'ACTIVE', 'INACTIVE'
+    if (status !== undefined) updateData.status = status;
     if (balanceDue !== undefined) updateData.balanceDue = Number(balanceDue);
 
-    // 5. Handle Package / Renewal recalculations
+    // 5. Handle Package / Renewal recalculations (with secure timezone offsets)
     if (packageId && packageId !== customer.packageId) {
       const pkg = await prisma.package.findUnique({ where: { id: packageId } });
       if (!pkg) return badRequestResponse("Selected package not found.");
 
       updateData.packageId = packageId;
 
-      // Calculate new date ranges based on changing packages
-      const startDate = cycleStartDate ? new Date(cycleStartDate) : new Date();
+      // Normalize date boundaries cleanly to local context midnights
+      let startDate = new Date();
+      if (cycleStartDate) {
+        const p = new Date(cycleStartDate);
+        startDate = !isNaN(p.getTime()) ? new Date(p.getFullYear(), p.getMonth(), p.getDate(), 0, 0, 0, 0) : new Date();
+      }
+
       const expiry = new Date(startDate);
       expiry.setDate(expiry.getDate() + pkg.durationDays);
 
       updateData.cycleStartDate = startDate;
       updateData.expiryDate = expiry;
 
-      // Add package cost to balance only if manually resetting via this package update
       if (balanceDue === undefined) {
         updateData.balanceDue = Number(pkg.price);
       }
     } else if (cycleStartDate) {
-      // If updating the cycle start date but maintaining the same package
-      const startDate = new Date(cycleStartDate);
+      // Handle shifting timelines for existing matching packages
+      const p = new Date(cycleStartDate);
+      let startDate = !isNaN(p.getTime()) ? new Date(p.getFullYear(), p.getMonth(), p.getDate(), 0, 0, 0, 0) : new Date();
+
+      const duration = customer.package?.durationDays ?? 30; // Clean fallback to prevent server crashes
       const expiry = new Date(startDate);
-      expiry.setDate(expiry.getDate() + customer.package.durationDays);
+      expiry.setDate(expiry.getDate() + duration);
 
       updateData.cycleStartDate = startDate;
       updateData.expiryDate = expiry;
@@ -114,6 +117,7 @@ export async function PATCH(request) {
       },
     });
   } catch (err) {
-    return serverErrorResponse("Failed to update customer.", err);
+    console.error("[CUSTOMER_PATCH_ERROR]:", err);
+    return serverErrorResponse("Failed to update customer details.", err);
   }
 }

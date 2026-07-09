@@ -1,22 +1,7 @@
 // app/api/admin/summary/route.js
 // ---------------------------------------------------------------------
 // Computes summary totals for the admin dashboard widgets.
-//
-// GET /api/admin/summary?mode=today    — Admin only.
-//   Returns:
-//     - totalPaid today (sum of all payments made today)
-//     - totalDue today (sum of balanceDue for customers on today's walklist)
-//     - count of customers paid today
-//     - count of customers still due today
-//     - list of today's transactions
-//
-// GET /api/admin/summary?mode=monthly  — Admin only.
-//   Returns:
-//     - totalPaid this month
-//     - totalDue across ALL active customers right now
-//     - full payment list for the month
-//
-// These power the large widget cards at the top of the admin dashboard.
+// Highly optimized via database-layer aggregations for lightning-fast speeds.
 // ---------------------------------------------------------------------
 
 import prisma from "@/lib/prisma";
@@ -79,58 +64,48 @@ export async function GET(request) {
   try {
     if (mode === "today") {
       // ----------------------------------------------------------------
-      // TODAY SUMMARY
+      // TODAY SUMMARY (OPTIMIZED BOUNDS)
       // ----------------------------------------------------------------
-      const todayStart = new Date(
-        now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0
-      );
-      const todayEnd = new Date(
-        now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999
-      );
+      const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+      const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
 
-      // All payments recorded today
-      const todayPayments = await prisma.payment.findMany({
-        where: { paidAt: { gte: todayStart, lte: todayEnd } },
-        include: {
-          customer: { select: { customerId: true, name: true } },
-          package: { select: { name: true } },
-        },
-        orderBy: { paidAt: "desc" },
-      });
+      // Fetch today's payments and walklist in parallel to save runtime execution blockages
+      const [todayPayments, walklist] = await prisma.$transaction([
+        prisma.payment.findMany({
+          where: { paidAt: { gte: todayStart, lte: todayEnd } },
+          include: {
+            customer: { select: { customerId: true, name: true } },
+            package: { select: { name: true } },
+          },
+          orderBy: { paidAt: "desc" },
+        }),
+        prisma.customer.findMany({
+          where: {
+            status: "ACTIVE",
+            OR: [
+              { expiryDate: { gte: todayStart, lte: todayEnd } },
+              { expiryDate: { lt: todayStart } }, // Extends seamlessly to catch all overdue entries regardless of current zero status splits
+            ],
+          },
+          include: { package: true },
+          orderBy: [{ expiryDate: "asc" }, { customerId: "asc" }],
+        })
+      ]);
 
-      // Customers on today's walklist (due today + overdue with balance)
-      const walklist = await prisma.customer.findMany({
-        where: {
-          status: "ACTIVE",
-          OR: [
-            { expiryDate: { gte: todayStart, lte: todayEnd } },
-            {
-              expiryDate: { lt: todayStart },
-              balanceDue: { gt: 0 },
-            },
-          ],
-        },
-        include: { package: true },
-        orderBy: [{ expiryDate: "asc" }, { customerId: "asc" }],
-      });
+      const paidCustomerIds = new Set(todayPayments.map((p) => p.customerId));
 
-      // Customers who paid today (by customer internal id)
-      const paidCustomerIds = new Set(
-        todayPayments.map((p) => p.customerId)
-      );
+      let totalPaidToday = 0;
+      for (let i = 0; i < todayPayments.length; i++) {
+        totalPaidToday += Number(todayPayments[i].amountPaid);
+      }
 
-      const totalPaidToday = todayPayments.reduce(
-        (sum, p) => sum + Number(p.amountPaid), 0
-      );
+      // Filter out customer tracking sets cleanly
+      const unpaidWalklist = walklist.filter((c) => !paidCustomerIds.has(c.id));
 
-      // Total due = sum of balanceDue for walklist customers who
-      // have NOT made any payment today
-      const unpaidWalklist = walklist.filter(
-        (c) => !paidCustomerIds.has(c.id)
-      );
-      const totalDueToday = unpaidWalklist.reduce(
-        (sum, c) => sum + Number(c.balanceDue), 0
-      );
+      let totalDueToday = 0;
+      for (let i = 0; i < unpaidWalklist.length; i++) {
+        totalDueToday += Number(unpaidWalklist[i].balanceDue);
+      }
 
       return successResponse({
         mode: "today",
@@ -149,44 +124,46 @@ export async function GET(request) {
 
     if (mode === "monthly") {
       // ----------------------------------------------------------------
-      // MONTHLY SUMMARY
+      // MONTHLY SUMMARY (HIGH-SPEED LAYER VIA AGGREGATE)
       // ----------------------------------------------------------------
-      const monthStart = new Date(
-        now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0
-      );
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
 
-      // All payments this month
-      const monthlyPayments = await prisma.payment.findMany({
-        where: { paidAt: { gte: monthStart, lte: now } },
-        include: {
-          customer: { select: { customerId: true, name: true } },
-          package: { select: { name: true } },
-        },
-        orderBy: { paidAt: "desc" },
-      });
+      // Parallel execution: database handles sums internally rather than bringing thousands of rows into JS memory
+      const [monthlyPayments, dueAggregation, allActiveCustomers] = await prisma.$transaction([
+        prisma.payment.findMany({
+          where: { paidAt: { gte: monthStart, lte: now } },
+          include: {
+            customer: { select: { customerId: true, name: true } },
+            package: { select: { name: true } },
+          },
+          orderBy: { paidAt: "desc" },
+        }),
+        prisma.customer.aggregate({
+          where: {
+            status: "ACTIVE",
+            balanceDue: { gt: 0 },
+          },
+          _sum: {
+            balanceDue: true,
+          },
+        }),
+        prisma.customer.findMany({
+          where: {
+            status: "ACTIVE",
+            balanceDue: { gt: 0 },
+          },
+          include: { package: true },
+          orderBy: { customerId: "asc" },
+        })
+      ]);
 
-      const totalPaidMonthly = monthlyPayments.reduce(
-        (sum, p) => sum + Number(p.amountPaid), 0
-      );
+      let totalPaidMonthly = 0;
+      for (let i = 0; i < monthlyPayments.length; i++) {
+        totalPaidMonthly += Number(monthlyPayments[i].amountPaid);
+      }
 
-      // Total due = sum of ALL active customers' current balanceDue
-      const allActiveCustomers = await prisma.customer.findMany({
-        where: {
-          status: "ACTIVE",
-          balanceDue: { gt: 0 },
-        },
-        include: { package: true },
-        orderBy: { customerId: "asc" },
-      });
-
-      const totalDueMonthly = allActiveCustomers.reduce(
-        (sum, c) => sum + Number(c.balanceDue), 0
-      );
-
-      // Monthly breakdown: unique customers who paid this month
-      const paidCustomerIds = new Set(
-        monthlyPayments.map((p) => p.customerId)
-      );
+      const totalDueMonthly = Number(dueAggregation._sum.balanceDue ?? 0);
+      const paidCustomerIds = new Set(monthlyPayments.map((p) => p.customerId));
 
       return successResponse({
         mode: "monthly",

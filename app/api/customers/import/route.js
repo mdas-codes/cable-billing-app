@@ -1,25 +1,7 @@
 // app/api/customers/import/route.js
 // ---------------------------------------------------------------------
-// Handles bulk customer import from a CSV or XLSX file.
-//
-// POST /api/customers/import  — Admin only.
-//                               Accepts a multipart/form-data upload
-//                               with a file field named "file".
-//                               Supports .csv and .xlsx formats.
-//                               Skips duplicate customerIds silently.
-//
-// Expected columns in the file (case-insensitive, any order):
-//   customerid  — Human-facing unique ID (e.g. C001, 101, CUST-5)
-//   name        — Customer full name
-//   package     — Package name (must exactly match an existing package)
-//   address     — (optional) Customer address
-//   startdate   — (optional) Cycle start date (YYYY-MM-DD). Defaults today.
-//
-// The importer:
-//   1. Reads and parses the uploaded file in memory (no disk writes).
-//   2. Looks up all existing packages by name (case-insensitive).
-//   3. For each row: validates fields, skips duplicates, creates customer.
-//   4. Returns a detailed report: created, skipped, and failed rows.
+// Handles high-performance batch customer imports from CSV or XLSX files.
+// Optimized via bulk transactions to prevent system timeout lockups.
 // ---------------------------------------------------------------------
 
 import prisma from "@/lib/prisma";
@@ -30,14 +12,8 @@ import {
   badRequestResponse,
   successResponse,
 } from "@/lib/auth";
-
-// We use the 'xlsx' package (SheetJS) which handles both .csv and .xlsx.
-// Install: npm install xlsx
 import * as XLSX from "xlsx";
 
-// ---------------------------------------------------------------------
-// POST /api/customers/import
-// ---------------------------------------------------------------------
 export async function POST(request) {
   const auth = verifyAdminPassword(request);
   if (!auth.ok) return unauthorizedResponse(auth.error);
@@ -64,7 +40,6 @@ export async function POST(request) {
     return badRequestResponse("Only .csv and .xlsx files are supported.");
   }
 
-  // Read file bytes into a buffer
   let buffer;
   try {
     const arrayBuffer = await file.arrayBuffer();
@@ -73,16 +48,13 @@ export async function POST(request) {
     return badRequestResponse("Could not read file contents.");
   }
 
-  // Parse the file using SheetJS
   let rows;
   try {
-    const workbook = XLSX.read(buffer, { type: "buffer", cellDates: true });
+    // raw: true + cellDates: true allows SheetJS to preserve robust date parsing formats
+    const workbook = XLSX.read(buffer, { type: "buffer", cellDates: true, raw: true });
     const sheetName = workbook.SheetNames[0];
     const worksheet = workbook.Sheets[sheetName];
-    rows = XLSX.utils.sheet_to_json(worksheet, {
-      defval: "",       // empty cells become empty string, not undefined
-      raw: false,       // format dates as strings
-    });
+    rows = XLSX.utils.sheet_to_json(worksheet, { defval: "" });
   } catch (err) {
     return serverErrorResponse("Failed to parse the uploaded file.", err);
   }
@@ -91,55 +63,41 @@ export async function POST(request) {
     return badRequestResponse("The uploaded file is empty or has no data rows.");
   }
 
-  // Normalize column headers to lowercase with no spaces for flexible matching
-  const normalizedRows = rows.map((row) => {
+  // Optimize column key translation mapping
+  const normalizedRows = new Array(rows.length);
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const keys = Object.keys(row);
     const normalized = {};
-    for (const key of Object.keys(row)) {
+    for (let j = 0; j < keys.length; j++) {
+      const key = keys[j];
       normalized[key.toLowerCase().replace(/\s+/g, "")] = row[key];
     }
-    return normalized;
-  });
+    normalizedRows[i] = normalized;
+  }
 
-  // ------------------------------------------------------------------
-  // Pre-fetch all existing packages (name → package object map)
-  // and all existing customerIds to detect duplicates efficiently.
-  // ------------------------------------------------------------------
   let packageMap;
   let existingCustomerIds;
   try {
-    const packages = await prisma.package.findMany({
-      where: { isActive: true },
-    });
-    packageMap = new Map(
-      packages.map((p) => [p.name.toLowerCase().trim(), p])
-    );
+    const [packages, existingCustomers] = await prisma.$transaction([
+      prisma.package.findMany({ where: { isActive: true } }),
+      prisma.customer.findMany({ select: { customerId: true } })
+    ]);
 
-    const existingCustomers = await prisma.customer.findMany({
-      select: { customerId: true },
-    });
-    existingCustomerIds = new Set(
-      existingCustomers.map((c) => c.customerId.toUpperCase())
-    );
+    packageMap = new Map(packages.map((p) => [p.name.toLowerCase().trim(), p]));
+    existingCustomerIds = new Set(existingCustomers.map((c) => c.customerId.toUpperCase()));
   } catch (err) {
-    return serverErrorResponse("Failed to load existing data for import.", err);
+    return serverErrorResponse("Failed to load schema prerequisites for import.", err);
   }
 
-  // ------------------------------------------------------------------
-  // Process each row
-  // ------------------------------------------------------------------
-  const results = {
-    created: [],
-    skipped: [],
-    failed: [],
-  };
+  const results = { created: [], skipped: [], failed: [] };
+  const recordsToInsert = [];
 
   for (let i = 0; i < normalizedRows.length; i++) {
     const row = normalizedRows[i];
-    const rowNum = i + 2; // +2 because row 1 is the header in the file
+    const rowNum = i + 2;
 
-    // Extract fields (try multiple common column name variants)
-    const rawCustomerId =
-      row["customerid"] || row["customer_id"] || row["id"] || "";
+    const rawCustomerId = row["customerid"] || row["customer_id"] || row["id"] || "";
     const rawName = row["name"] || row["customername"] || row["customer_name"] || "";
     const rawPackage = row["package"] || row["packagename"] || row["package_name"] || "";
     const rawAddress = row["address"] || row["addr"] || "";
@@ -150,7 +108,6 @@ export async function POST(request) {
     const packageName = String(rawPackage).trim().toLowerCase();
     const address = String(rawAddress).trim();
 
-    // Validate required fields
     if (!customerId) {
       results.failed.push({ row: rowNum, reason: "Missing Customer ID." });
       continue;
@@ -164,62 +121,64 @@ export async function POST(request) {
       continue;
     }
 
-    // Skip duplicates
     if (existingCustomerIds.has(customerId)) {
       results.skipped.push({ row: rowNum, customerId, reason: "Customer ID already exists." });
       continue;
     }
 
-    // Look up the package
     const pkg = packageMap.get(packageName);
     if (!pkg) {
       results.failed.push({
         row: rowNum,
         customerId,
-        reason: `Package "${rawPackage}" not found. Create it first in the admin panel.`,
+        reason: `Package "${rawPackage}" not found.`,
       });
       continue;
     }
 
-    // Parse start date
+    // Secure timezone normalization parsing structure
     let cycleStart;
     if (rawStartDate) {
       const parsed = new Date(rawStartDate);
-      cycleStart = isNaN(parsed.getTime()) ? new Date() : parsed;
+      if (!isNaN(parsed.getTime())) {
+        cycleStart = new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate(), 0, 0, 0, 0);
+      } else {
+        const today = new Date();
+        cycleStart = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0, 0);
+      }
     } else {
-      cycleStart = new Date();
+      const today = new Date();
+      cycleStart = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0, 0);
     }
 
-    // Calculate expiry
     const expiry = new Date(cycleStart);
     expiry.setDate(expiry.getDate() + pkg.durationDays);
 
-    // Create the customer
+    // Stage record for high-speed single bulk injection batching
+    recordsToInsert.push({
+      customerId,
+      name,
+      address: address || null,
+      packageId: pkg.id,
+      cycleStartDate: cycleStart,
+      expiryDate: expiry,
+      balanceDue: Number(pkg.price),
+      status: "ACTIVE",
+    });
+
+    existingCustomerIds.add(customerId);
+    results.created.push({ row: rowNum, customerId, name });
+  }
+
+  // Execute single lightning-fast bulk creation query
+  if (recordsToInsert.length > 0) {
     try {
-      await prisma.customer.create({
-        data: {
-          customerId,
-          name,
-          address: address || null,
-          packageId: pkg.id,
-          cycleStartDate: cycleStart,
-          expiryDate: expiry,
-          balanceDue: Number(pkg.price),
-          status: "ACTIVE",
-        },
+      await prisma.customer.createMany({
+        data: recordsToInsert,
+        skipDuplicates: true,
       });
-
-      // Add to the in-memory set so subsequent rows in the same file
-      // don't try to create the same customer twice.
-      existingCustomerIds.add(customerId);
-
-      results.created.push({ row: rowNum, customerId, name });
     } catch (err) {
-      results.failed.push({
-        row: rowNum,
-        customerId,
-        reason: `Database error: ${err.message}`,
-      });
+      return serverErrorResponse("Bulk allocation block writing phase failed.", err);
     }
   }
 
